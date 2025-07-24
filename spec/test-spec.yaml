@@ -1,0 +1,81 @@
+# test_specification.yml
+test_specification:
+  overview: >
+    This document defines end-to-end and edge-case test scenarios for the
+    Discord→GitHub integration bot. Each test case includes preconditions,
+    execution steps, and expected results.
+  environment:
+    discord:
+      guild_id: TEST_GUILD
+      channel_id: TEST_CHANNEL
+    github:
+      repo_owner: test-user
+      repo_name: test-repo
+    database: test_db
+  test_cases:
+    - id: TC-01
+      title: Valid Markdown Attachment → Issue Creation
+      preconditions:
+        - Bot is invited to TEST_GUILD
+        - GitHub App is installed on test-user/test-repo
+        - guild_installations entry exists for TEST_GUILD → test-user/test-repo
+      steps:
+        - User uploads “note.md” (size < 1 KB) in TEST_CHANNEL
+        - Bot fetches attachment and calls OpenAI
+        - Bot authenticates via GitHub App and creates an Issue
+      expected_results:
+        - Discord bot replies with a message containing the new Issue URL
+        - GitHub Issue appears with title “📄 note.md”
+        - Issue body contains:
+          • “## 📋 要約” section with bullet points
+          • “## 📎 Original Content” code block showing file content
+    - id: TC-02
+      title: Unsupported File Type
+      preconditions:
+        - Same as TC-01
+      steps:
+        - User uploads “image.png” in TEST_CHANNEL
+      expected_results:
+        - Bot replies “サポートされていないファイル形式です。”
+        - No API calls to OpenAI or GitHub are made
+    - id: TC-03
+      title: Large Markdown (> 512 KB)
+      preconditions:
+        - Same as TC-01
+      steps:
+        - User uploads a 600 KB Markdown file
+      expected_results:
+        - Bot detects size > threshold
+        - Bot falls back to uploading content as a private Gist and replies with Gist URL
+        - No Issue is created
+    - id: TC-04
+      title: Missing Guild→Repo Mapping
+      preconditions:
+        - Bot is invited
+        - GitHub App installed, but no guild_installations record exists
+      steps:
+        - User uploads “note.md”
+      expected_results:
+        - Bot replies “GitHub App がインストールされていません”
+        - No OpenAI or GitHub API calls
+    - id: TC-05
+      title: OpenAI API Failure
+      preconditions:
+        - Same as TC-01
+        - Simulate OpenAI service outage (force API error)
+      steps:
+        - User uploads “note.md”
+      expected_results:
+        - Bot replies “AI要約の生成中にエラーが発生しました。”
+        - No GitHub API call
+        - Error is logged to operation_logs with status “error”
+    - id: TC-06
+      title: GitHub App Uninstallation Cleanup
+      preconditions:
+        - Installation exists for TEST_GUILD
+        - GitHub App is uninstalled via GitHub UI
+      steps:
+        - Receive webhook “installation.deleted”
+      expected_results:
+        - guild_installations record for TEST_GUILD is removed
+        - Bot does not process new uploads in TEST_CHANNEL
