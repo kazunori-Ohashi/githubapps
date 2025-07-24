@@ -1,0 +1,108 @@
+# coding_instructions.yml
+project: discord-github-integration-bot
+version: 1.0.0
+description: >
+  YAML-driven instructions for an LLM to generate a secure, multi-tenant SaaS Discord→GitHub integration
+  bot using GitHub App (short-lived installation tokens), OpenAI summarization, and PostgreSQL storage.
+stack:
+  node: ">=18"
+  typescript: true
+  frameworks:
+    - discord.js
+    - fastify
+    - @octokit/rest
+    - @octokit/auth-app
+    - openai
+    - pg
+modules:
+  - name: discord-bot
+    path: src/bot/discord-bot.ts
+    responsibilities:
+      - Initialize Discord.js client
+      - Listen for MessageCreate events
+      - Delegate attachments to handler
+  - name: message-handler
+    path: src/bot/handlers/message.ts
+    responsibilities:
+      - Validate file extension (.md, .txt, .json, .yml/.yaml)
+      - Fetch attachment content
+      - Call API service and reply with result
+  - name: github-service
+    path: src/api/services/github.service.ts
+    responsibilities:
+      - Lookup guild→installation mapping
+      - Summarize via OpenAI
+      - Authenticate as GitHub App (JWT→installation token)
+      - Create Issue (or file) via Octokit
+      - Log operations in DB
+  - name: openai-service
+    path: src/api/services/openai.service.ts
+    responsibilities:
+      - Call OpenAI chat.completions with summarization prompt
+      - Return structured summary markdown
+  - name: api-server
+    path: src/api/server.ts
+    responsibilities:
+      - Configure Fastify with Helmet & CORS
+      - Register routes: /api/github, /webhooks/github, /api/setup
+      - Expose health and metrics endpoints
+  - name: webhook-route
+    path: src/api/routes/webhooks.ts
+    responsibilities:
+      - Validate GitHub webhook signature
+      - Handle installation.created & installation.deleted
+  - name: setup-route
+    path: src/api/routes/setup.ts
+    responsibilities:
+      - Provide installation metadata
+      - Persist guild⇄repo mappings
+  - name: logger
+    path: src/shared/logger.ts
+    responsibilities:
+      - Configure Winston transports (console + files)
+      - Format logs with timestamp and stack
+  - name: metrics
+    path: src/shared/metrics.ts
+    responsibilities:
+      - Define Prometheus counters/gauges/histograms
+      - Expose /metrics endpoint
+  - name: error-handler
+    path: src/shared/error-handler.ts
+    responsibilities:
+      - Centralize AppError class
+      - Log errors and emit metrics
+      - Notify on critical failures
+database:
+  migrations:
+    - id: 001
+      file: database/migrations/001_create_installations.sql
+      description: Create installations table
+    - id: 002
+      file: database/migrations/002_create_guild_installations.sql
+      description: Create guild_installations table
+    - id: 003
+      file: database/migrations/003_create_operation_logs.sql
+      description: Create operation_logs table
+routes:
+  - prefix: /api/github
+    module: githubRoutes
+  - prefix: /webhooks/github
+    module: webhookRoutes
+  - prefix: /api/setup
+    module: setupRoutes
+environment:
+  NODE_ENV: development
+  PORT: 3000
+  DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN}           # secret
+  GITHUB_APP_ID: ${GITHUB_APP_ID}                   # secret
+  GITHUB_APP_PRIVATE_KEY: ${GITHUB_APP_PRIVATE_KEY} # secret
+  GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET}   # secret
+  OPENAI_API_KEY: ${OPENAI_API_KEY}                 # secret
+  DATABASE_URL: ${DATABASE_URL}                     # secret
+  JWT_SECRET: ${JWT_SECRET}                         # secret
+  ENCRYPTION_KEY: ${ENCRYPTION_KEY}                 # secret
+build:
+  install: npm ci
+  compile: npm run build
+run:
+  start: npm start
