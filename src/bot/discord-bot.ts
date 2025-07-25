@@ -1,14 +1,16 @@
-import { Client, GatewayIntentBits, Events, Interaction } from 'discord.js';
+import { Client, GatewayIntentBits, Events, Interaction, Partials, MessageReaction, User } from 'discord.js';
 import { Logger } from '../shared/logger';
 import { ErrorHandler } from '../shared/error-handler';
 import { Metrics } from '../shared/metrics';
 import { MessageHandler } from './handlers/message';
 import { InteractionHandler } from './handlers/interaction-handler';
+import { ReactionHandler } from './handlers/reaction-handler';
 
 export class DiscordBot {
   private client: Client;
   private messageHandler: MessageHandler;
   private interactionHandler: InteractionHandler;
+  private reactionHandler: ReactionHandler;
 
   constructor() {
     this.client = new Client({
@@ -16,11 +18,14 @@ export class DiscordBot {
         GatewayIntentBits.Guilds,
         GatewayIntentBits.GuildMessages,
         GatewayIntentBits.MessageContent,
+        GatewayIntentBits.GuildMessageReactions,
       ],
+      partials: [Partials.Message, Partials.Channel, Partials.Reaction],
     });
 
     this.messageHandler = new MessageHandler();
     this.interactionHandler = new InteractionHandler();
+    this.reactionHandler = new ReactionHandler();
     this.setupEventHandlers();
   }
 
@@ -34,21 +39,13 @@ export class DiscordBot {
       try {
         await this.messageHandler.handleMessage(message);
       } catch (error) {
-        const context: {
-          guildId?: string;
-          channelId?: string;
-          userId?: string;
-          operation?: string;
-        } = {
+        const guildId = message.guild?.id;
+        const context = {
           channelId: message.channel.id,
           userId: message.author.id,
-          operation: 'message_handling'
+          operation: 'message_handling',
+          ...(guildId ? { guildId } : {}),
         };
-        
-        if (message.guild?.id) {
-          context.guildId = message.guild.id;
-        }
-        
         await ErrorHandler.handleError(error as Error, context);
       }
     });
@@ -57,23 +54,37 @@ export class DiscordBot {
       try {
         await this.interactionHandler.handleInteraction(interaction);
       } catch (error) {
-        const context: {
-          guildId?: string;
-          channelId?: string;
-          userId?: string;
-          operation?: string;
-        } = {
+        const guildId = interaction.guild?.id;
+        const channelId = interaction.channelId;
+        const context = {
           userId: interaction.user.id,
           operation: 'interaction_handling',
+          ...(guildId ? { guildId } : {}),
+          ...(channelId ? { channelId } : {}),
         };
+        await ErrorHandler.handleError(error as Error, context);
+      }
+    });
 
-        if (interaction.guild?.id) {
-          context.guildId = interaction.guild.id;
+    this.client.on(Events.MessageReactionAdd, async (reaction, user) => {
+      if (reaction.partial) {
+        try {
+          await reaction.fetch();
+        } catch (error) {
+          Logger.error('Failed to fetch partial reaction', error as Error);
+          return;
         }
-        if (interaction.channelId) {
-          context.channelId = interaction.channelId;
-        }
-
+      }
+      try {
+        await this.reactionHandler.handleReaction(reaction as MessageReaction, user as User);
+      } catch (error) {
+        const guildId = reaction.message.guild?.id;
+        const context = {
+          userId: user.id,
+          operation: 'reaction_handling',
+          channelId: reaction.message.channel.id,
+          ...(guildId ? { guildId } : {}),
+        };
         await ErrorHandler.handleError(error as Error, context);
       }
     });
