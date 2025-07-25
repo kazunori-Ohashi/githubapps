@@ -1,12 +1,14 @@
-import { Client, GatewayIntentBits, Events } from 'discord.js';
+import { Client, GatewayIntentBits, Events, Interaction } from 'discord.js';
 import { Logger } from '../shared/logger';
 import { ErrorHandler } from '../shared/error-handler';
 import { Metrics } from '../shared/metrics';
 import { MessageHandler } from './handlers/message';
+import { InteractionHandler } from './handlers/interaction-handler';
 
 export class DiscordBot {
   private client: Client;
   private messageHandler: MessageHandler;
+  private interactionHandler: InteractionHandler;
 
   constructor() {
     this.client = new Client({
@@ -18,6 +20,7 @@ export class DiscordBot {
     });
 
     this.messageHandler = new MessageHandler();
+    this.interactionHandler = new InteractionHandler();
     this.setupEventHandlers();
   }
 
@@ -46,6 +49,31 @@ export class DiscordBot {
           context.guildId = message.guild.id;
         }
         
+        await ErrorHandler.handleError(error as Error, context);
+      }
+    });
+
+    this.client.on(Events.InteractionCreate, async (interaction: Interaction) => {
+      try {
+        await this.interactionHandler.handleInteraction(interaction);
+      } catch (error) {
+        const context: {
+          guildId?: string;
+          channelId?: string;
+          userId?: string;
+          operation?: string;
+        } = {
+          userId: interaction.user.id,
+          operation: 'interaction_handling',
+        };
+
+        if (interaction.guild?.id) {
+          context.guildId = interaction.guild.id;
+        }
+        if (interaction.channelId) {
+          context.channelId = interaction.channelId;
+        }
+
         await ErrorHandler.handleError(error as Error, context);
       }
     });
