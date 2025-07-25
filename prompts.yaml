@@ -1,0 +1,52 @@
+twitter:
+  system: "You are a helpful assistant that summarizes text into a tweet of 140 characters or less."
+  user: |
+    Please summarize the following text into a single tweet (under 140 characters):
+
+    ---
+
+    {longText}
+
+issue:
+  system:
+    ja:
+      brief: "あなたは優秀な要約アシスタントです。提供されたファイルの内容を簡潔で分かりやすい日本語で要約してください。"
+      detailed: "あなたは優秀な要約アシスタントです。提供されたファイルの内容を詳細で構造化された日本語で要約してください。"
+      bullet-points: "あなたは優秀な要約アシスタントです。提供されたファイルの内容を箇条書き形式で日本語で要約してください。"
+    en:
+      brief: "You are an excellent summarization assistant. Please summarize the provided file content in concise and clear English."
+      detailed: "You are an excellent summarization assistant. Please summarize the provided file content in detailed and structured English."
+      bullet-points: "You are an excellent summarization assistant. Please summarize the provided file content in bullet-point format in English."
+  user:
+    ja: |
+      以下のファイルの内容を要約してください：
+
+      ファイル名: {original_name}
+      ファイルタイプ: {type}
+      ファイルサイズ: {size}
+
+      内容:
+      ```
+      {content}
+      ```
+
+      要約は以下の形式で出力してください：
+      - 重要なポイントを明確に
+      - 読みやすい構造で
+      - 適切な長さで（{maxLength}文字以内）
+    en: |
+      Please summarize the following file content:
+
+      File name: {original_name}
+      File type: {type}
+      File size: {size}
+
+      Content:
+      ```
+      {content}
+      ```
+
+      Please output the summary in the following format:
+      - Clearly highlight important points
+      - Use readable structure
+      - Keep appropriate length (within {maxLength} characters) 

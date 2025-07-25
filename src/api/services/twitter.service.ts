@@ -2,12 +2,26 @@
 import { OpenAIService } from './openai.service';
 import { Logger } from '../../shared/logger';
 import { Metrics } from '../../shared/metrics';
+import * as fs from 'fs';
+import * as yaml from 'js-yaml';
 
 export class TwitterService {
   private openaiService: OpenAIService;
+  private prompts: any;
 
   constructor() {
     this.openaiService = new OpenAIService();
+    this.loadPrompts();
+  }
+
+  private loadPrompts(): void {
+    try {
+      const promptsFile = fs.readFileSync('prompts.yaml', 'utf8');
+      this.prompts = yaml.load(promptsFile);
+    } catch (error) {
+      Logger.error('Failed to load prompts.yaml', error as Error);
+      throw new Error('Failed to load prompts configuration');
+    }
   }
 
   /**
@@ -46,12 +60,8 @@ export class TwitterService {
    * @returns A summary of the text, less than 140 characters.
    */
   public async summarizeForTweet(longText: string): Promise<string> {
-    const systemPrompt = 'You are a helpful assistant that summarizes text into a tweet of 140 characters or less.';
-    const userPrompt = `Please summarize the following text into a single tweet (under 140 characters):
-
----
-
-${longText}`;
+    const systemPrompt = this.prompts.twitter.system;
+    const userPrompt = this.prompts.twitter.user.replace('{longText}', longText);
 
     try {
       const response = await (this.openaiService as any).client.chat.completions.create({
