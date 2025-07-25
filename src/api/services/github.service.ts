@@ -166,8 +166,12 @@ export class GitHubService {
     summary: string
   ): Promise<GitHubIssueResult> {
     try {
+      // タイトルを現在時刻のYYYYMMDDHHmm形式に
+      const now = new Date();
+      const pad = (n: number) => n.toString().padStart(2, '0');
+      const title = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}${pad(now.getHours())}${pad(now.getMinutes())}`;
       const request: GitHubCreateIssueRequest = {
-        title: `📄 ${file.original_name}`,
+        title,
         body: this.buildIssueBody(file, summary),
         labels: ['discord-upload', 'auto-generated'],
       };

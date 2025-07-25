@@ -43,7 +43,7 @@ class Application {
       // Start services in parallel - API Server temporarily disabled for debugging
       await Promise.all([
         this.startDiscordBot(),
-        // this.startAPIServer()  // Temporarily commented out
+        this.startAPIServer()  // ← コメントアウト解除
       ]);
 
       Logger.info('Discord Bot started successfully (API Server disabled for debugging)');
