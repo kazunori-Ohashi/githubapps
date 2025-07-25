@@ -3,6 +3,8 @@ import { Logger } from '../../shared/logger';
 import { ExternalServiceError } from '../../shared/error-handler';
 import { Metrics } from '../../shared/metrics';
 import { ProcessedFile } from '../../shared/types';
+import * as fs from 'fs';
+import * as yaml from 'js-yaml';
 
 export interface SummarizationOptions {
   maxLength?: number;
@@ -12,6 +14,7 @@ export interface SummarizationOptions {
 
 export class OpenAIService {
   private client: OpenAI;
+  private prompts: any;
 
   constructor() {
     const apiKey = process.env.OPENAI_API_KEY;
@@ -22,6 +25,19 @@ export class OpenAIService {
     this.client = new OpenAI({
       apiKey,
     });
+
+    // Load prompts from YAML file
+    this.loadPrompts();
+  }
+
+  private loadPrompts(): void {
+    try {
+      const promptsFile = fs.readFileSync('prompts.yaml', 'utf8');
+      this.prompts = yaml.load(promptsFile);
+    } catch (error) {
+      Logger.error('Failed to load prompts.yaml', error as Error);
+      throw new Error('Failed to load prompts configuration');
+    }
   }
 
   async summarizeFile(
@@ -99,63 +115,22 @@ export class OpenAIService {
     const language = options.language || 'ja';
     const style = options.style || 'brief';
 
-    const basePrompts = {
-      ja: {
-        brief: 'あなたは優秀な要約アシスタントです。提供されたファイルの内容を簡潔で分かりやすい日本語で要約してください。',
-        detailed: 'あなたは優秀な要約アシスタントです。提供されたファイルの内容を詳細で構造化された日本語で要約してください。',
-        'bullet-points': 'あなたは優秀な要約アシスタントです。提供されたファイルの内容を箇条書き形式で日本語で要約してください。'
-      },
-      en: {
-        brief: 'You are an excellent summarization assistant. Please summarize the provided file content in concise and clear English.',
-        detailed: 'You are an excellent summarization assistant. Please summarize the provided file content in detailed and structured English.',
-        'bullet-points': 'You are an excellent summarization assistant. Please summarize the provided file content in bullet-point format in English.'
-      }
-    };
-
-    return basePrompts[language][style];
+    return this.prompts.issue.system[language][style];
   }
 
   private buildSummarizationPrompt(file: ProcessedFile, options: SummarizationOptions): string {
     const language = options.language || 'ja';
     
-    const prompts = {
-      ja: `
-以下のファイルの内容を要約してください：
-
-ファイル名: ${file.original_name}
-ファイルタイプ: ${file.type}
-ファイルサイズ: ${this.formatFileSize(file.size)}
-
-内容:
-\`\`\`
-${file.content}
-\`\`\`
-
-要約は以下の形式で出力してください：
-- 重要なポイントを明確に
-- 読みやすい構造で
-- 適切な長さで（${options.maxLength || 500}文字以内）
-`,
-      en: `
-Please summarize the following file content:
-
-File name: ${file.original_name}
-File type: ${file.type}
-File size: ${this.formatFileSize(file.size)}
-
-Content:
-\`\`\`
-${file.content}
-\`\`\`
-
-Please output the summary in the following format:
-- Clearly highlight important points
-- Use readable structure
-- Keep appropriate length (within ${options.maxLength || 500} characters)
-`
-    };
-
-    return prompts[language];
+    let promptTemplate = this.prompts.issue.user[language];
+    
+    // Replace placeholders
+    promptTemplate = promptTemplate.replace('{original_name}', file.original_name);
+    promptTemplate = promptTemplate.replace('{type}', file.type);
+    promptTemplate = promptTemplate.replace('{size}', this.formatFileSize(file.size));
+    promptTemplate = promptTemplate.replace('{content}', file.content);
+    promptTemplate = promptTemplate.replace('{maxLength}', (options.maxLength || 500).toString());
+    
+    return promptTemplate;
   }
 
   private getMaxTokens(options: SummarizationOptions): number {
