@@ -4,14 +4,17 @@ import { Logger } from '../../shared/logger';
 import { ErrorHandler, ValidationError } from '../../shared/error-handler';
 import { Metrics } from '../../shared/metrics';
 import { GitHubService } from '../../api/services/github.service';
+import { TwitterService } from '../../api/services/twitter.service';
 import { ProcessedFile } from '../../shared/types';
 
 export class InteractionHandler {
   private githubService: GitHubService;
+  private twitterService: TwitterService;
   private readonly supportedExtensions = ['.md', '.txt', '.json', '.yml', '.yaml'];
 
   constructor() {
     this.githubService = new GitHubService();
+    this.twitterService = new TwitterService();
   }
 
   async handleInteraction(interaction: Interaction): Promise<void> {
@@ -62,12 +65,14 @@ export class InteractionHandler {
       Metrics.recordDiscordMessage(interaction.guild.id, 'success');
 
     } catch (error) {
-      const context: { guildId?: string; channelId?: string; userId: string; operation: string; } = {
+      const guildId = interaction.guild?.id;
+      const channelId = interaction.channelId;
+      const context = {
         userId: interaction.user.id,
         operation: 'issue_command',
+        ...(guildId ? { guildId } : {}),
+        ...(channelId ? { channelId } : {}),
       };
-      if(interaction.guild?.id) context.guildId = interaction.guild.id;
-      if(interaction.channelId) context.channelId = interaction.channelId;
 
       await ErrorHandler.handleError(error as Error, context);
       Metrics.recordDiscordMessage(interaction.guild?.id || 'unknown', 'error');
