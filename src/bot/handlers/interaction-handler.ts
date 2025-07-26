@@ -30,52 +30,13 @@ export class InteractionHandler {
     const { commandName } = interaction;
 
     if (commandName === 'issue') {
-      const subcommand = (interaction as any).options.getSubcommand();
-      if (subcommand === 'file') {
-        await this.handleIssueFileCommand(interaction as ChatInputCommandInteraction);
-      } else if (subcommand === 'text') {
-        await this.handleIssueTextCommand(interaction as ChatInputCommandInteraction);
-      }
+      await this.handleIssueTextCommand(interaction as ChatInputCommandInteraction);
     } else if (commandName === 'insert') {
       await this.handleInsertCommand(interaction as ChatInputCommandInteraction);
     }
   }
 
-  private async handleIssueFileCommand(interaction: ChatInputCommandInteraction): Promise<void> {
-    try {
-      if (!interaction.guild) {
-        throw new ValidationError('このコマンドはサーバー内でのみ使用できます。');
-      }
-      const attachment = interaction.options.getAttachment('file', true);
-      this.validateFile(attachment);
-      const processedFile = await this.downloadAndProcessFile(attachment);
-      await interaction.deferReply();
-      const result = await this.githubService.processFileUpload(
-        interaction.guild.id,
-        interaction.channelId,
-        interaction.user.id,
-        processedFile
-      );
-      await interaction.editReply(`✅ Issue created: ${result.url}`);
-      Metrics.recordDiscordMessage(interaction.guild.id, 'success');
-    } catch (error) {
-      const guildId = interaction.guild?.id;
-      const channelId = interaction.channelId;
-      const context = {
-        userId: interaction.user.id,
-        operation: 'issue_command',
-        ...(guildId ? { guildId } : {}),
-        ...(channelId ? { channelId } : {}),
-      };
-      await ErrorHandler.handleError(error as Error, context);
-      Metrics.recordDiscordMessage(interaction.guild?.id || 'unknown', 'error');
-      if (interaction.replied || interaction.deferred) {
-        await interaction.editReply(`❌ ${ErrorHandler.getErrorMessage(error as Error)}`);
-      } else {
-        await interaction.reply({ content: `❌ ${ErrorHandler.getErrorMessage(error as Error)}`, ephemeral: true });
-      }
-    }
-  }
+
 
   private async handleIssueTextCommand(interaction: ChatInputCommandInteraction): Promise<void> {
     try {
