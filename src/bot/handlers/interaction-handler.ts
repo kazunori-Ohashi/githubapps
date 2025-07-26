@@ -5,16 +5,23 @@ import { ErrorHandler, ValidationError } from '../../shared/error-handler';
 import { Metrics } from '../../shared/metrics';
 import { GitHubService } from '../../api/services/github.service';
 import { TwitterService } from '../../api/services/twitter.service';
+import { OpenAIService } from '../../api/services/openai.service';
 import { ProcessedFile } from '../../shared/types';
+
+// 入力待ち状態管理用のMap（グローバルで仮実装）
+export const issueTextWaitMap = new Map<string, string>(); // userId -> channelId
+export const insertTextWaitMap = new Map<string, { channelId: string, style: 'prep' | 'pas' }>(); // userId -> { channelId, style }
 
 export class InteractionHandler {
   private githubService: GitHubService;
   private twitterService: TwitterService;
+  private openaiService: OpenAIService;
   private readonly supportedExtensions = ['.md', '.txt', '.json', '.yml', '.yaml'];
 
   constructor() {
     this.githubService = new GitHubService();
     this.twitterService = new TwitterService();
+    this.openaiService = new OpenAIService();
   }
 
   async handleInteraction(interaction: Interaction): Promise<void> {
@@ -23,47 +30,34 @@ export class InteractionHandler {
     const { commandName } = interaction;
 
     if (commandName === 'issue') {
-      await this.handleIssueCommand(interaction as ChatInputCommandInteraction);
+      const subcommand = (interaction as any).options.getSubcommand();
+      if (subcommand === 'file') {
+        await this.handleIssueFileCommand(interaction as ChatInputCommandInteraction);
+      } else if (subcommand === 'text') {
+        await this.handleIssueTextCommand(interaction as ChatInputCommandInteraction);
+      }
+    } else if (commandName === 'insert') {
+      await this.handleInsertCommand(interaction as ChatInputCommandInteraction);
     }
   }
 
-  private async handleIssueCommand(interaction: ChatInputCommandInteraction): Promise<void> {
+  private async handleIssueFileCommand(interaction: ChatInputCommandInteraction): Promise<void> {
     try {
       if (!interaction.guild) {
-        throw new ValidationError('This command can only be used in a server.');
+        throw new ValidationError('このコマンドはサーバー内でのみ使用できます。');
       }
-
-      const mode = interaction.options.getString('mode', true);
-      let processedFile: ProcessedFile;
-
-      if (mode === 'file') {
-        const attachment = interaction.options.getAttachment('file', true);
-        this.validateFile(attachment);
-        processedFile = await this.downloadAndProcessFile(attachment);
-      } else if (mode === 'text') {
-        const content = interaction.options.getString('content', true);
-        processedFile = {
-          original_name: `issue-from-text.md`,
-          content: content,
-          size: Buffer.byteLength(content, 'utf-8'),
-          type: 'markdown'
-        };
-      } else {
-        throw new ValidationError("Unsupported mode. Choose 'file' or 'text'.");
-      }
-
+      const attachment = interaction.options.getAttachment('file', true);
+      this.validateFile(attachment);
+      const processedFile = await this.downloadAndProcessFile(attachment);
       await interaction.deferReply();
-
       const result = await this.githubService.processFileUpload(
         interaction.guild.id,
         interaction.channelId,
         interaction.user.id,
         processedFile
       );
-
       await interaction.editReply(`✅ Issue created: ${result.url}`);
       Metrics.recordDiscordMessage(interaction.guild.id, 'success');
-
     } catch (error) {
       const guildId = interaction.guild?.id;
       const channelId = interaction.channelId;
@@ -73,9 +67,71 @@ export class InteractionHandler {
         ...(guildId ? { guildId } : {}),
         ...(channelId ? { channelId } : {}),
       };
-
       await ErrorHandler.handleError(error as Error, context);
       Metrics.recordDiscordMessage(interaction.guild?.id || 'unknown', 'error');
+      if (interaction.replied || interaction.deferred) {
+        await interaction.editReply(`❌ ${ErrorHandler.getErrorMessage(error as Error)}`);
+      } else {
+        await interaction.reply({ content: `❌ ${ErrorHandler.getErrorMessage(error as Error)}`, ephemeral: true });
+      }
+    }
+  }
+
+  private async handleIssueTextCommand(interaction: ChatInputCommandInteraction): Promise<void> {
+    try {
+      if (!interaction.guild) {
+        throw new ValidationError('このコマンドはサーバー内でのみ使用できます。');
+      }
+      // 入力待ち状態に登録
+      issueTextWaitMap.set(interaction.user.id, interaction.channelId);
+      await interaction.reply({ content: '✏️ 次の発言をIssueとして処理します。テキストを入力してください。', ephemeral: true });
+    } catch (error) {
+      const guildId = interaction.guild?.id;
+      const channelId = interaction.channelId;
+      const context = {
+        userId: interaction.user.id,
+        operation: 'issue_command',
+        ...(guildId ? { guildId } : {}),
+        ...(channelId ? { channelId } : {}),
+      };
+      await ErrorHandler.handleError(error as Error, context);
+      if (interaction.replied || interaction.deferred) {
+        await interaction.editReply(`❌ ${ErrorHandler.getErrorMessage(error as Error)}`);
+      } else {
+        await interaction.reply({ content: `❌ ${ErrorHandler.getErrorMessage(error as Error)}`, ephemeral: true });
+      }
+    }
+  }
+
+  private async handleInsertCommand(interaction: ChatInputCommandInteraction): Promise<void> {
+    try {
+      if (!interaction.guild) {
+        throw new ValidationError('このコマンドはサーバー内でのみ使用できます。');
+      }
+      
+      const style = interaction.options.getString('style', true) as 'prep' | 'pas';
+      
+      // 入力待ち状態に登録
+      insertTextWaitMap.set(interaction.user.id, {
+        channelId: interaction.channelId,
+        style: style
+      });
+      
+      const styleName = style === 'prep' ? 'PREP法' : 'PAS法';
+      await interaction.reply({ 
+        content: `✏️ 次の発言を${styleName}でMarkdown整形します。テキストを入力してください。`, 
+        ephemeral: true 
+      });
+    } catch (error) {
+      const guildId = interaction.guild?.id;
+      const channelId = interaction.channelId;
+      const context = {
+        userId: interaction.user.id,
+        operation: 'insert_command',
+        ...(guildId ? { guildId } : {}),
+        ...(channelId ? { channelId } : {}),
+      };
+      await ErrorHandler.handleError(error as Error, context);
       if (interaction.replied || interaction.deferred) {
         await interaction.editReply(`❌ ${ErrorHandler.getErrorMessage(error as Error)}`);
       } else {

@@ -47,7 +47,8 @@ export class GitHubService {
     guildId: string,
     channelId: string,
     userId: string,
-    file: ProcessedFile
+    file: ProcessedFile,
+    skipSummary: boolean = false
   ): Promise<GitHubIssueResult | GitHubGistResult> {
     const startTime = Date.now();
     
@@ -56,7 +57,8 @@ export class GitHubService {
         guildId,
         channelId,
         fileName: file.original_name,
-        fileSize: file.size
+        fileSize: file.size,
+        skipSummary
       });
 
       const guildMapping = await FileUtils.getGuildMapping(guildId);
@@ -69,7 +71,8 @@ export class GitHubService {
       const targetRepo = this.getTargetRepo(guildMapping, channelId);
       const installationClient = await this.getInstallationClient(guildMapping.installation_id);
 
-      const summary = await this.openaiService.summarizeFile(file);
+      // insertコマンドの場合は要約をスキップ
+      const summary = skipSummary ? '' : await this.openaiService.summarizeFile(file);
 
       const isLargeFile = file.size > 512 * 1024; // 512KB threshold
       
@@ -247,11 +250,13 @@ export class GitHubService {
   }
 
   private buildIssueBody(file: ProcessedFile, summary: string): string {
-    return `## 📋 要約
+    const summarySection = summary ? `## 📋 要約
 
 ${summary}
 
-## 📎 Original Content
+` : '';
+
+    return `${summarySection}## 📎 Original Content
 
 **ファイル名:** ${file.original_name}  
 **ファイルサイズ:** ${this.formatFileSize(file.size)}  

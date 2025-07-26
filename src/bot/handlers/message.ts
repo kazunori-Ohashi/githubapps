@@ -4,14 +4,18 @@ import { ErrorHandler, ValidationError } from '../../shared/error-handler';
 import { Metrics } from '../../shared/metrics';
 import { ProcessedFile } from '../../shared/types';
 import { GitHubService } from '../../api/services/github.service';
+import { OpenAIService } from '../../api/services/openai.service';
+import { issueTextWaitMap, insertTextWaitMap } from './interaction-handler';
 
 export class MessageHandler {
   private githubService: GitHubService;
+  private openaiService: OpenAIService;
   private readonly supportedExtensions = ['.md', '.txt', '.json', '.yml', '.yaml'];
   private readonly maxFileSize = 10 * 1024 * 1024; // 10MB
 
   constructor() {
     this.githubService = new GitHubService();
+    this.openaiService = new OpenAIService();
   }
 
   async handleMessage(message: Message): Promise<void> {
@@ -35,6 +39,85 @@ export class MessageHandler {
 
     if (!message.guild) {
       Logger.info('Message not in guild (DM) - skipping', { authorId: message.author.id });
+      return;
+    }
+
+    // /issue text 入力待ち状態のユーザーか？
+    const waitChannelId = issueTextWaitMap.get(message.author.id);
+    if (waitChannelId && message.channel.id === waitChannelId) {
+      // テキスト発言をIssueとして処理
+      try {
+        const processedFile: ProcessedFile = {
+          original_name: `issue-from-text.md`,
+          content: message.content,
+          size: Buffer.byteLength(message.content, 'utf-8'),
+          type: 'markdown'
+        };
+        const result = await this.githubService.processFileUpload(
+          message.guild!.id,
+          message.channel.id,
+          message.author.id,
+          processedFile
+        );
+        await message.reply(`✅ Issue created: ${result.url}`);
+        Metrics.recordDiscordMessage(message.guild!.id, 'success');
+      } catch (error) {
+        await ErrorHandler.handleError(error as Error, {
+          guildId: message.guild?.id,
+          channelId: message.channel.id,
+          userId: message.author.id,
+          operation: 'issue_text_upload'
+        });
+        Metrics.recordDiscordMessage(message.guild?.id || 'unknown', 'error');
+        await message.reply(`❌ Issue作成中にエラー: ${ErrorHandler.getErrorMessage(error as Error)}`);
+      } finally {
+        issueTextWaitMap.delete(message.author.id);
+      }
+      return;
+    }
+
+    // /insert 入力待ち状態のユーザーか？
+    const insertWaitInfo = insertTextWaitMap.get(message.author.id);
+    if (insertWaitInfo && message.channel.id === insertWaitInfo.channelId) {
+      // テキスト発言をinsertとして処理
+      try {
+        const formattedContent = await this.openaiService.formatWithInsert(
+          message.content,
+          insertWaitInfo.style
+        );
+        
+        // 元文章と整形された文章を組み合わせてIssueを作成
+        const combinedContent = `# 📝 元の文章\n\n${message.content}\n\n---\n\n# ✨ 整形された文章\n\n${formattedContent}`;
+        
+        const processedFile: ProcessedFile = {
+          original_name: `insert-${insertWaitInfo.style}-formatted.md`,
+          content: combinedContent,
+          size: Buffer.byteLength(combinedContent, 'utf-8'),
+          type: 'markdown'
+        };
+        
+        const result = await this.githubService.processFileUpload(
+          message.guild!.id,
+          message.channel.id,
+          message.author.id,
+          processedFile,
+          true // skipSummary: insertコマンドの場合は要約をスキップ
+        );
+        
+        await message.reply(`✅ Markdown整形完了 & Issue作成:\n\n${formattedContent}\n\n📎 Issue: ${result.url}`);
+        Metrics.recordDiscordMessage(message.guild!.id, 'success');
+      } catch (error) {
+        await ErrorHandler.handleError(error as Error, {
+          guildId: message.guild?.id,
+          channelId: message.channel.id,
+          userId: message.author.id,
+          operation: 'insert_text_format'
+        });
+        Metrics.recordDiscordMessage(message.guild?.id || 'unknown', 'error');
+        await message.reply(`❌ Markdown整形中にエラー: ${ErrorHandler.getErrorMessage(error as Error)}`);
+      } finally {
+        insertTextWaitMap.delete(message.author.id);
+      }
       return;
     }
 

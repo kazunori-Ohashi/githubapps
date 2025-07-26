@@ -79,7 +79,6 @@ export class ReactionHandler {
       }
       const tweetUrl = `https://twitter.com/intent/tweet?text=${encodeURIComponent(tweetText)}`;
 
-      // 編集ボタン付きで本文を明示表示
       if (message.channel && 'send' in message.channel && typeof message.channel.send === 'function') {
         const row = new ActionRowBuilder<MessageActionRowComponentBuilder>().addComponents(
           new ButtonBuilder()
@@ -87,40 +86,45 @@ export class ReactionHandler {
             .setLabel('編集')
             .setStyle(ButtonStyle.Primary),
           new ButtonBuilder()
-            .setLabel('ツイート画面を開く')
-            .setStyle(ButtonStyle.Link)
-            .setURL(tweetUrl)
+            .setCustomId('post_tweet')
+            .setLabel('投稿')
+            .setStyle(ButtonStyle.Success)
         );
         const sent = await message.channel.send({
-          content: `✍️ ツイートプレビュー:
-\n\`\`\`${tweetText}\`\`\``,
+          content: `✍️ ツイートプレビューが生成されました。以下が内容です。\n\n${tweetText}`,
           components: [row],
           reply: { messageReference: message.id },
         });
 
         // ボタンのインタラクションリスナー
         const collector = sent.createMessageComponentCollector({
-          filter: (i) => i.customId === 'edit_tweet' && i.user.id === user.id,
+          filter: (i) => ['edit_tweet', 'post_tweet'].includes(i.customId) && i.user.id === user.id,
           time: 120000
         });
         collector.on('collect', async (interaction) => {
-          // Modalで編集UIを表示
-          const modal = new ModalBuilder()
-            .setCustomId('tweet_modal')
-            .setTitle('ツイート編集')
-            .addComponents(
-              new ActionRowBuilder<TextInputBuilder>().addComponents(
-                new TextInputBuilder()
-                  .setCustomId('tweet_text')
-                  .setLabel('ツイート本文（140字以内）')
-                  .setStyle(TextInputStyle.Paragraph)
-                  .setMaxLength(140)
-                  .setValue(tweetText)
-              )
-            );
-          await interaction.showModal(modal);
-
-          // Modalのsubmitイベントはグローバルでlistenする必要がある
+          if (interaction.customId === 'edit_tweet') {
+            // Modalで編集UIを表示
+            const modal = new ModalBuilder()
+              .setCustomId('tweet_modal')
+              .setTitle('ツイート編集')
+              .addComponents(
+                new ActionRowBuilder<TextInputBuilder>().addComponents(
+                  new TextInputBuilder()
+                    .setCustomId('tweet_text')
+                    .setLabel('ツイート本文（140字以内）')
+                    .setStyle(TextInputStyle.Paragraph)
+                    .setMaxLength(140)
+                    .setValue(tweetText)
+                )
+              );
+            await interaction.showModal(modal);
+          } else if (interaction.customId === 'post_tweet') {
+            // 投稿ボタンでツイートURLをテキストで案内
+            await interaction.reply({
+              content: `✅ ツイートはこちらから投稿できます:\n${tweetUrl}`,
+              ephemeral: true,
+            });
+          }
         });
 
         // Modal submitリスナー（グローバル）
