@@ -6,35 +6,35 @@ const { Routes } = require('discord-api-types/v10');
 const commands = [
   {
     name: 'issue',
-    description: 'Create a GitHub Issue with an AI summary.',
+    description: 'その場で思いついたアイデアをGitHub Issueとして保存します。',
     options: [
       {
-        name: 'mode',
+        type: 1, // SUB_COMMAND
+        name: 'text',
+        description: '文字入力（この語文字を入力して下さい）',
+        options: [] // 入力欄なし、次の発言をBotが受け付ける
+      }
+    ]
+  },
+  {
+    name: 'insert',
+    description: 'テキストをPREP法またはPAS法でMarkdown整形します。',
+    options: [
+      {
+        name: 'style',
         type: 3, // STRING
-        description: "Processing mode: 'file' or 'text'",
+        description: '整形手法を選択してください',
         required: true,
         choices: [
           {
-            name: 'File',
-            value: 'file'
+            name: 'PREP法（Point → Reason → Example → Point）',
+            value: 'prep'
           },
           {
-            name: 'Text',
-            value: 'text'
+            name: 'PAS法（Problem → Agitation → Solution）',
+            value: 'pas'
           }
         ]
-      },
-      {
-        name: 'file',
-        type: 11, // ATTACHMENT
-        description: 'The file to summarize and create an issue from.',
-        required: false,
-      },
-      {
-        name: 'content',
-        type: 3, // STRING
-        description: 'The text content to summarize and create an issue from (max 4000 chars).',
-        required: false,
       }
     ]
   }

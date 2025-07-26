@@ -1,0 +1,26 @@
+services:
+  - type: Background Worker
+    name: discord-commit-bot
+    env: node
+    plan: starter
+    repo: https://github.com/kazunori-Ohashi/githubapps.git
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DISCORD_BOT_TOKEN
+        sync: false
+      - key: GITHUB_APP_ID
+        sync: false
+      - key: GITHUB_APP_PRIVATE_KEY
+        sync: false
+      - key: GITHUB_WEBHOOK_SECRET
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: PORT
+        value: 10000
+    healthCheckPath: /health
+    autoDeploy: true
+    branch: main 

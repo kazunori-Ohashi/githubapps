@@ -1,52 +1,111 @@
 twitter:
-  system: "You are a helpful assistant that summarizes text into a tweet of 140 characters or less."
+  system: "You are a skilled social media copywriter.
+  Summarize the input text into a single tweet of **up to 140 characters**, aiming to use **as close to the limit as possible (135–140 characters)**.
+  Use rich and engaging language while preserving the original meaning. You may add hashtags, emojis, or rhetorical flair to make it more appealing.
+  Avoid repetition and be concise, but not overly brief."
   user: |
-    Please summarize the following text into a single tweet (under 140 characters):
+    Please summarize the following text into a single tweet, aiming for around 140 characters in total length:
+
 
     ---
 
     {longText}
 
 issue:
-  system:
-    ja:
-      brief: "あなたは優秀な要約アシスタントです。提供されたファイルの内容を簡潔で分かりやすい日本語で要約してください。"
-      detailed: "あなたは優秀な要約アシスタントです。提供されたファイルの内容を詳細で構造化された日本語で要約してください。"
-      bullet-points: "あなたは優秀な要約アシスタントです。提供されたファイルの内容を箇条書き形式で日本語で要約してください。"
-    en:
-      brief: "You are an excellent summarization assistant. Please summarize the provided file content in concise and clear English."
-      detailed: "You are an excellent summarization assistant. Please summarize the provided file content in detailed and structured English."
-      bullet-points: "You are an excellent summarization assistant. Please summarize the provided file content in bullet-point format in English."
-  user:
-    ja: |
-      以下のファイルの内容を要約してください：
+  system_prompt:
+    content: "あなたは **Markdown 整形のエキスパート** です。
+    ---
+      ## ⚠️ 無視すべき入力
+      - 意味をなさない文字列や記号の羅列
+      - 文脈を持たない短い文章（10 文字未満）
+      全体が無意味/短文のみの場合は「⚠️ 要約対象がありません」と返答してください。"
+    usage: "on_message() issue モード処理で使用"
+    trigger: "/issue 後のユーザーメッセージ受信時"
+    parameters: []
 
-      ファイル名: {original_name}
-      ファイルタイプ: {type}
-      ファイルサイズ: {size}
-
-      内容:
-      ```
+  formatting_template:
+    content: |
+      以下のテキストを **可読性最優先** で Markdown 整形してください。元テキストはオリジナルとして残して下さい。
+      ---
       {content}
+      ---
+      ### ガイドライン
+      - 見出し階層 (#, ##, ###) を適切に
+      - 箇条書き・番号付きリスト活用
+      - **太字** *斜体* などで重要箇所を強調
+      - コードブロックや引用を必要に応じて
+      - 読みやすさを損なわないよう適切に改行
+    usage: "on_message() OpenAI API 呼び出しで使用"
+    trigger: "Insert モードでユーザーがメッセージ送信時"
+    parameters: ["content"]
+    notes: "元テキスト → Markdown"
+
+insert:
+  system_prompt:
+    content: |
+      あなたは **専門的なテクニカルライター兼エディター** です。
+      与えられたコンテンツから、読者が一気読みできる **ストラクチャード記事** を作成してください。
+      - 文章の論理構造・見出し階層を最適化
+      - 例え話や具体例を交えて理解を促進
+      - 出力は Markdown 形式
+
+      ---
+      ## ⚠️ 無視すべき入力
+      - 意味をなさない文字列や記号の羅列
+      - 文脈を持たない短い文章（10 文字未満 かつ 固有名詞・動詞を含まない）
+      これらは記事生成の対象に **含めない** でください。全体が無意味/短文のみの場合は、
       ```
-
-      要約は以下の形式で出力してください：
-      - 重要なポイントを明確に
-      - 読みやすい構造で
-      - 適切な長さで（{maxLength}文字以内）
-    en: |
-      Please summarize the following file content:
-
-      File name: {original_name}
-      File type: {type}
-      File size: {size}
-
-      Content:
+      ⚠️ 入力が記事生成に適していません
       ```
+      とだけ返答して処理を終了します。
+    usage: "insert_article() 関数で使用"
+    trigger: "/insert コマンド実行時"
+    parameters: []
+
+  prep_template:
+    content: |
+      以下のコンテンツを **PREP法** を使用して魅力的な Markdown 記事に変換してください。
+      ### コンテンツ:
       {content}
-      ```
 
-      Please output the summary in the following format:
-      - Clearly highlight important points
-      - Use readable structure
-      - Keep appropriate length (within {maxLength} characters) 
+      ---
+      ### 出力フォーマット
+      # 🟢 POINT
+      問題を明確に提示してください
+
+      ## 🟡 REASON
+      問題の深刻さや影響を説明してください
+
+      ## 🔵 EXAMPLE
+      解決策や提案を具体的に示してください
+
+      ## 🟢 POINT（まとめ）
+      解決策の価値を再強調してください
+    usage: "build_insert_prompt() 関数で style='prep' 時に使用"
+    trigger: "/insert コマンドで style パラメータが 'prep' の時"
+    parameters: ["content"]
+    notes: "PREP: Point → Reason → Example → Point"
+
+  pas_template:
+    content: |
+      以下のコンテンツを **PAS法** を使用して説得力のある Markdown 記事に変換してください。
+      ### コンテンツ:
+      {content}
+
+      ---
+      ### 出力フォーマット
+      # 🚩 PROBLEM
+      問題・課題を明確に提示してください
+
+      ## 🔥 AGITATION
+      問題の深刻さや緊急性を強調してください
+
+      ## 💡 SOLUTION
+      具体的な解決策を提示してください
+
+      ## 🏁 結論
+      解決策の効果と価値をまとめてください
+    usage: "build_insert_prompt() 関数で style='pas' 時に使用"
+    trigger: "/insert コマンドで style パラメータが 'pas' の時"
+    parameters: ["content"]
+    notes: "PAS: Problem → Agitation → Solution"

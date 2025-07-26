@@ -67,8 +67,7 @@ export class OpenAIService {
             content: prompt
           }
         ],
-        max_tokens: this.getMaxTokens(options),
-        temperature: 0.3,
+        temperature: 0.5,
       });
 
       const summary = response.choices[0]?.message?.content;
@@ -112,36 +111,19 @@ export class OpenAIService {
   }
 
   private getSystemPrompt(options: SummarizationOptions): string {
-    const language = options.language || 'ja';
-    const style = options.style || 'brief';
-
-    return this.prompts.issue.system[language][style];
+    return this.prompts.issue.system_prompt.content;
   }
 
   private buildSummarizationPrompt(file: ProcessedFile, options: SummarizationOptions): string {
-    const language = options.language || 'ja';
-    
-    let promptTemplate = this.prompts.issue.user[language];
+    let promptTemplate = this.prompts.issue.formatting_template.content;
     
     // Replace placeholders
-    promptTemplate = promptTemplate.replace('{original_name}', file.original_name);
-    promptTemplate = promptTemplate.replace('{type}', file.type);
-    promptTemplate = promptTemplate.replace('{size}', this.formatFileSize(file.size));
     promptTemplate = promptTemplate.replace('{content}', file.content);
-    promptTemplate = promptTemplate.replace('{maxLength}', (options.maxLength || 500).toString());
     
     return promptTemplate;
   }
 
-  private getMaxTokens(options: SummarizationOptions): number {
-    const maxLength = options.maxLength || 500;
-    
-    // Rough estimation: 1 token ≈ 3-4 characters for Japanese, 4-5 for English
-    const language = options.language || 'ja';
-    const multiplier = language === 'ja' ? 3.5 : 4.5;
-    
-    return Math.min(Math.ceil(maxLength / multiplier), 1000);
-  }
+
 
   private formatFileSize(bytes: number): string {
     const sizes = ['Bytes', 'KB', 'MB', 'GB'];
@@ -149,6 +131,40 @@ export class OpenAIService {
     
     const i = Math.floor(Math.log(bytes) / Math.log(1024));
     return Math.round(bytes / Math.pow(1024, i) * 100) / 100 + ' ' + sizes[i];
+  }
+
+  private cleanFormattedContent(content: string): string {
+    // ガイドラインや指示文を除去
+    const lines = content.split('\n');
+    const cleanedLines: string[] = [];
+    let skipSection = false;
+    
+    for (const line of lines) {
+      // ガイドラインセクションをスキップ
+      if (line.includes('ガイドライン') || line.includes('### ガイドライン')) {
+        skipSection = true;
+        continue;
+      }
+      
+      // 指示文をスキップ
+      if (line.includes('以下のテキストを') || line.includes('出力フォーマット')) {
+        skipSection = true;
+        continue;
+      }
+      
+      // 空行でセクション終了を検出
+      if (skipSection && line.trim() === '') {
+        skipSection = false;
+        continue;
+      }
+      
+      // スキップ中でない場合のみ追加
+      if (!skipSection) {
+        cleanedLines.push(line);
+      }
+    }
+    
+    return cleanedLines.join('\n').trim();
   }
 
   async healthCheck(): Promise<boolean> {
@@ -168,6 +184,81 @@ export class OpenAIService {
     } catch (error) {
       Logger.error('OpenAI health check failed', error as Error);
       return false;
+    }
+  }
+
+  async formatWithInsert(content: string, style: 'prep' | 'pas'): Promise<string> {
+    const startTime = Date.now();
+    
+    try {
+      Logger.info(`Starting insert formatting`, {
+        style,
+        contentLength: content.length
+      });
+
+      const systemPrompt = this.prompts.insert.system_prompt.content;
+      const template = style === 'prep' 
+        ? this.prompts.insert.prep_template.content 
+        : this.prompts.insert.pas_template.content;
+      
+      const userPrompt = template.replace('{content}', content);
+      
+      const response = await this.client.chat.completions.create({
+        model: 'gpt-4o-mini',
+        messages: [
+          {
+            role: 'system',
+            content: systemPrompt
+          },
+          {
+            role: 'user',
+            content: userPrompt
+          }
+        ],
+        temperature: 0.5,
+      });
+
+      const result = response.choices[0]?.message?.content;
+      
+      if (!result) {
+        throw new ExternalServiceError('OpenAI', 'No formatted content generated');
+      }
+
+      // ガイドラインや指示文を除去
+      const cleanedResult = this.cleanFormattedContent(result);
+
+      const duration = (Date.now() - startTime) / 1000;
+      
+      Logger.info(`Insert formatting completed`, {
+        style,
+        resultLength: cleanedResult.length,
+        duration: `${duration}s`
+      });
+
+      Metrics.recordOpenAIApiCall('gpt-4o-mini', 'success');
+      
+      return cleanedResult.trim();
+      
+    } catch (error) {
+      const duration = (Date.now() - startTime) / 1000;
+      
+      Logger.error(`Insert formatting failed`, error as Error, {
+        style,
+        contentLength: content.length,
+        duration: `${duration}s`
+      });
+
+      Metrics.recordOpenAIApiCall('gpt-4o-mini', 'error');
+      
+      const errorAny = error as any;
+      if (errorAny.status && errorAny.type) {
+        throw new ExternalServiceError('OpenAI', `API Error: ${(error as Error).message}`, {
+          status: errorAny.status,
+          type: errorAny.type
+        });
+      }
+      
+      throw new ExternalServiceError('OpenAI', `Unexpected error: ${(error as Error).message}`);
     }
   }
 }
