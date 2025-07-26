@@ -37,6 +37,34 @@ const commands = [
         ]
       }
     ]
+  },
+  {
+    name: 'article',
+    description: 'ファイルをアップロードしてPREP法またはPAS法でMarkdown整形します。',
+    options: [
+      {
+        name: 'file',
+        type: 11, // ATTACHMENT
+        description: 'アップロードするファイルを選択してください。',
+        required: true,
+      },
+      {
+        name: 'style',
+        type: 3, // STRING
+        description: '整形手法を選択してください',
+        required: true,
+        choices: [
+          {
+            name: 'PREP法（Point → Reason → Example → Point）',
+            value: 'prep'
+          },
+          {
+            name: 'PAS法（Problem → Agitation → Solution）',
+            value: 'pas'
+          }
+        ]
+      }
+    ]
   }
 ];
 

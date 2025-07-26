@@ -6,7 +6,11 @@ import { Metrics } from '../../shared/metrics';
 import { GitHubService } from '../../api/services/github.service';
 import { TwitterService } from '../../api/services/twitter.service';
 import { OpenAIService } from '../../api/services/openai.service';
+import { FileProcessorService } from '../../api/services/file-processor.service';
 import { ProcessedFile } from '../../shared/types';
+import * as fs from 'fs';
+import * as path from 'path';
+import * as os from 'os';
 
 // 入力待ち状態管理用のMap（グローバルで仮実装）
 export const issueTextWaitMap = new Map<string, string>(); // userId -> channelId
@@ -16,12 +20,14 @@ export class InteractionHandler {
   private githubService: GitHubService;
   private twitterService: TwitterService;
   private openaiService: OpenAIService;
+  private fileProcessorService: FileProcessorService;
   private readonly supportedExtensions = ['.md', '.txt', '.json', '.yml', '.yaml'];
 
   constructor() {
     this.githubService = new GitHubService();
     this.twitterService = new TwitterService();
     this.openaiService = new OpenAIService();
+    this.fileProcessorService = new FileProcessorService();
   }
 
   async handleInteraction(interaction: Interaction): Promise<void> {
@@ -33,6 +39,8 @@ export class InteractionHandler {
       await this.handleIssueTextCommand(interaction as ChatInputCommandInteraction);
     } else if (commandName === 'insert') {
       await this.handleInsertCommand(interaction as ChatInputCommandInteraction);
+    } else if (commandName === 'article') {
+      await this.handleArticleCommand(interaction as ChatInputCommandInteraction);
     }
   }
 
@@ -101,6 +109,88 @@ export class InteractionHandler {
     }
   }
 
+  private async handleArticleCommand(interaction: ChatInputCommandInteraction): Promise<void> {
+    try {
+      if (!interaction.guild) {
+        throw new ValidationError('このコマンドはサーバー内でのみ使用できます。');
+      }
+      
+      const attachment = interaction.options.getAttachment('file', true);
+      const style = interaction.options.getString('style', true) as 'prep' | 'pas';
+      
+      // ファイル形式の検証
+      if (!this.fileProcessorService.isSupportedFile(attachment.name)) {
+        const supportedExtensions = this.fileProcessorService.getSupportedExtensions().join(', ');
+        throw new ValidationError(`サポートされていないファイル形式です。対応形式: ${supportedExtensions}`);
+      }
+      
+      await interaction.deferReply();
+      
+      // ファイルをダウンロードして一時ファイルとして保存
+      const tempFilePath = await this.downloadFileToTemp(attachment);
+      
+      // ファイル処理サービスでファイルを処理
+      const fileResult = await this.fileProcessorService.processFile(
+        tempFilePath,
+        attachment.name,
+        attachment.size
+      );
+      
+      // OpenAIで整形
+      const formattedContent = await this.openaiService.formatWithInsert(
+        fileResult.content,
+        style
+      );
+      
+      // GitHub Issueとして保存
+      const combinedContent = `# 📝 元のファイル\n\n**ファイル名:** ${fileResult.originalName}\n**ファイルサイズ:** ${this.formatFileSize(fileResult.size)}\n**ファイルタイプ:** ${fileResult.type}\n\n---\n\n# ✨ 整形された文章\n\n${formattedContent}`;
+      
+      const issueFile: ProcessedFile = {
+        original_name: `article-${style}-formatted.md`,
+        content: combinedContent,
+        size: Buffer.byteLength(combinedContent, 'utf-8'),
+        type: 'markdown'
+      };
+      
+      const result = await this.githubService.processFileUpload(
+        interaction.guild.id,
+        interaction.channelId,
+        interaction.user.id,
+        issueFile,
+        true // skipSummary: articleコマンドの場合は要約をスキップ
+      );
+      
+      const styleName = style === 'prep' ? 'PREP法' : 'PAS法';
+      await interaction.editReply(`✅ ファイル処理 & ${styleName}整形完了:\n\n${formattedContent}\n\n📎 Issue: ${result.url}`);
+      Metrics.recordDiscordMessage(interaction.guild.id, 'success');
+      
+    } catch (error) {
+      const guildId = interaction.guild?.id;
+      const channelId = interaction.channelId;
+      const context = {
+        userId: interaction.user.id,
+        operation: 'article_command',
+        ...(guildId ? { guildId } : {}),
+        ...(channelId ? { channelId } : {}),
+      };
+      await ErrorHandler.handleError(error as Error, context);
+      Metrics.recordDiscordMessage(interaction.guild?.id || 'unknown', 'error');
+      if (interaction.replied || interaction.deferred) {
+        await interaction.editReply(`❌ ${ErrorHandler.getErrorMessage(error as Error)}`);
+      } else {
+        await interaction.reply({ content: `❌ ${ErrorHandler.getErrorMessage(error as Error)}`, ephemeral: true });
+      }
+    }
+  }
+
+  private formatFileSize(bytes: number): string {
+    if (bytes === 0) return '0 Bytes';
+    const k = 1024;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+  }
+
   private validateFile(attachment: Attachment): void {
     const fileName = attachment.name.toLowerCase();
     const isSupported = this.supportedExtensions.some(ext => fileName.endsWith(ext));
@@ -137,5 +227,24 @@ export class InteractionHandler {
       'yaml': 'yaml'
     };
     return typeMap[extension || ''] || 'unknown';
+  }
+
+  private async downloadFileToTemp(attachment: Attachment): Promise<string> {
+    try {
+      const response = await fetch(attachment.url);
+      if (!response.ok) {
+        throw new Error(`Failed to download file: ${response.statusText}`);
+      }
+      
+      const buffer = await response.arrayBuffer();
+      const tempDir = os.tmpdir();
+      const tempFilePath = path.join(tempDir, attachment.name);
+      
+      await fs.promises.writeFile(tempFilePath, Buffer.from(buffer));
+      
+      return tempFilePath;
+    } catch (error) {
+      throw new Error(`ファイルのダウンロードに失敗しました: ${(error as Error).message}`);
+    }
   }
 }
