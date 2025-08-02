@@ -65,6 +65,24 @@ const commands = [
         ]
       }
     ]
+  },
+  {
+    name: 'config',
+    description: 'GitHubリポジトリとの紐付けを設定します。',
+    options: [
+      {
+        name: 'repo',
+        type: 3, // STRING
+        description: 'GitHubリポジトリ（owner/repo）',
+        required: true
+      },
+      {
+        name: 'installation',
+        type: 3, // STRING
+        description: 'GitHub AppインストールID',
+        required: true
+      }
+    ]
   }
 ];
 

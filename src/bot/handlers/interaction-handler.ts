@@ -7,6 +7,7 @@ import { GitHubService } from '../../api/services/github.service';
 import { TwitterService } from '../../api/services/twitter.service';
 import { OpenAIService } from '../../api/services/openai.service';
 import { FileProcessorService } from '../../api/services/file-processor.service';
+import { ConfigService } from '../../api/services/config.service';
 import { ProcessedFile } from '../../shared/types';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -21,6 +22,7 @@ export class InteractionHandler {
   private twitterService: TwitterService;
   private openaiService: OpenAIService;
   private fileProcessorService: FileProcessorService;
+  private configService: ConfigService;
   private readonly supportedExtensions = ['.md', '.txt', '.json', '.yml', '.yaml'];
 
   constructor() {
@@ -28,6 +30,7 @@ export class InteractionHandler {
     this.twitterService = new TwitterService();
     this.openaiService = new OpenAIService();
     this.fileProcessorService = new FileProcessorService();
+    this.configService = new ConfigService();
   }
 
   async handleInteraction(interaction: Interaction): Promise<void> {
@@ -41,6 +44,8 @@ export class InteractionHandler {
       await this.handleInsertCommand(interaction as ChatInputCommandInteraction);
     } else if (commandName === 'article') {
       await this.handleArticleCommand(interaction as ChatInputCommandInteraction);
+    } else if (commandName === 'config') {
+      await this.handleConfigCommand(interaction as ChatInputCommandInteraction);
     }
   }
 
@@ -243,8 +248,64 @@ export class InteractionHandler {
       await fs.promises.writeFile(tempFilePath, Buffer.from(buffer));
       
       return tempFilePath;
-    } catch (error) {
-      throw new Error(`ファイルのダウンロードに失敗しました: ${(error as Error).message}`);
-    }
-  }
-}
+             } catch (error) {
+           throw new Error(`ファイルのダウンロードに失敗しました: ${(error as Error).message}`);
+         }
+       }
+
+       private async handleConfigCommand(interaction: ChatInputCommandInteraction): Promise<void> {
+         try {
+           if (!interaction.guild) {
+             throw new ValidationError('このコマンドはサーバー内でのみ使用できます。');
+           }
+
+           // 権限チェック
+           if (!interaction.memberPermissions?.has('ManageGuild')) {
+             throw new ValidationError('このコマンドはサーバー管理権限が必要です。');
+           }
+
+           const repo = interaction.options.getString('repo', true);
+           const installationId = interaction.options.getString('installation', true);
+
+           await interaction.deferReply({ ephemeral: true });
+
+           // 設定処理実行
+           await this.configService.configureGuild(
+             interaction.guild.id,
+             interaction.guild.name,
+             repo,
+             installationId
+           );
+
+           // 成功メッセージ
+           const [owner, repoName] = repo.split('/');
+           await interaction.editReply(
+             `✅ このサーバーを ${owner}/${repoName} (installation: ${installationId}) に紐付けました。\n` +
+             `ℹ️ /config-status で現設定を確認できます。/config-test で疎通テストできます。`
+           );
+
+           Metrics.recordDiscordMessage(interaction.guild.id, 'success');
+
+         } catch (error) {
+           const guildId = interaction.guild?.id;
+           const channelId = interaction.channelId;
+           const context = {
+             userId: interaction.user.id,
+             operation: 'config_command',
+             ...(guildId ? { guildId } : {}),
+             ...(channelId ? { channelId } : {}),
+           };
+           await ErrorHandler.handleError(error as Error, context);
+           Metrics.recordDiscordMessage(interaction.guild?.id || 'unknown', 'error');
+           
+           if (interaction.replied || interaction.deferred) {
+             await interaction.editReply(`❌ ${ErrorHandler.getErrorMessage(error as Error)}`);
+           } else {
+             await interaction.reply({ 
+               content: `❌ ${ErrorHandler.getErrorMessage(error as Error)}`, 
+               ephemeral: true 
+             });
+           }
+         }
+       }
+     }

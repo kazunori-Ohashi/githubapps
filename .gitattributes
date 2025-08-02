@@ -1,0 +1,17 @@
+.env               export-ignore
+.env.*             export-ignore
+client_secret*     export-ignore
+*.pem              export-ignore
+*.key              export-ignore
+*.p12              export-ignore
+*.crt              export-ignore
+*.der              export-ignore
+
+node_modules/      export-ignore
+dist/              export-ignore
+coverage/          export-ignore
+data/              export-ignore
+
+.DS_Store          export-ignore
+Thumbs.db          export-ignore
+.gitattributes     export-ignore
