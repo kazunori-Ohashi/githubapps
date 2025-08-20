@@ -68,19 +68,54 @@ const commands = [
   },
   {
     name: 'config',
-    description: 'GitHubリポジトリとの紐付けを設定します。',
+    description: '設定（OpenAIキー、リポジトリ紐付けなど）',
     options: [
       {
-        name: 'repo',
-        type: 3, // STRING
-        description: 'GitHubリポジトリ（owner/repo）',
-        required: true
+        type: 1, // SUB_COMMAND
+        name: 'openai_key',
+        description: 'OpenAI APIキーを設定',
+        options: [
+          {
+            name: 'key',
+            type: 3, // STRING
+            description: 'sk- で始まるAPIキー',
+            required: true
+          }
+        ]
       },
       {
-        name: 'installation',
-        type: 3, // STRING
-        description: 'GitHub AppインストールID',
-        required: true
+        type: 1,
+        name: 'status',
+        description: '現在の設定状況を表示'
+      },
+      {
+        type: 1,
+        name: 'delete_openai',
+        description: 'OpenAI APIキーを削除'
+      },
+      {
+        type: 1,
+        name: 'test_openai',
+        description: 'OpenAI キー疎通テスト'
+      },
+      {
+        type: 1,
+        name: 'repo',
+        description: 'GitHub リポジトリを紐付け',
+        options: [
+          {
+            name: 'name',
+            type: 3, // STRING
+            description: 'owner/repo',
+            required: true
+          },
+          {
+            name: 'installation',
+            type: 3, // STRING
+            description: 'GitHub AppインストールID',
+            required: true
+          }
+        ]
       }
     ]
   }

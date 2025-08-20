@@ -5,6 +5,7 @@ import { Metrics } from '../shared/metrics';
 import { MessageHandler } from './handlers/message';
 import { InteractionHandler } from './handlers/interaction-handler';
 import { ReactionHandler } from './handlers/reaction-handler';
+import { syncSlashCommands } from './command-registry';
 
 export class DiscordBot {
   private client: Client;
@@ -33,6 +34,10 @@ export class DiscordBot {
     this.client.once(Events.ClientReady, (readyClient) => {
       Logger.info(`Discord bot is ready! Logged in as ${readyClient.user.tag}`);
       Metrics.setActiveConnections('discord', 1);
+      // Auto-sync slash commands unless explicitly disabled
+      if ((process.env.COMMAND_AUTO_REGISTER || 'true').toLowerCase() !== 'false') {
+        syncSlashCommands().catch(err => Logger.error('Command sync failed', err as Error));
+      }
     });
 
     this.client.on(Events.MessageCreate, async (message) => {

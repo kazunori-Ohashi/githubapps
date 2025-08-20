@@ -83,7 +83,8 @@ export class MessageHandler {
       try {
         const formattedContent = await this.openaiService.formatWithInsert(
           message.content,
-          insertWaitInfo.style
+          insertWaitInfo.style,
+          message.guild!.id
         );
         
         // 元文章と整形された文章を組み合わせてIssueを作成
