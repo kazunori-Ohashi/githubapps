@@ -114,44 +114,12 @@ jobs:
 ### 本番（workflowモード）
 
 ![alt text](<CleanShot 2025-08-21 at 07.29.13.jpg>)
-┌─────────────────┐         ┌──────────────────┐
-│     Discord     │ ───▶    │   Discord Bot    │
-│  (File Upload)  │         │  (Issue Creator) │
-└─────────────────┘         └─────────┬────────┘
-                                      │ create issue
-                                      ▼
-                            ┌─────────────────┐
-                            │     GitHub      │
-                            │     Issues      │
-                            └─────────┬───────┘
-                                      │ triggers
-                                      ▼
-                            ┌──────────────────┐
-                            │  GitHub Actions  │
-                            │ (Summary with    │
-                            │  OPENAI_API_KEY  │
-                            │   in Secrets)    │
-                            └─────────┬────────┘
-                                      │ comment
-                                      ▼
-                            ┌─────────────────┐
-                            │  Issue Comment  │
-                            └─────────────────┘
+
 
 ### 開発（botモード）
 
 ![alt text](<CleanShot 2025-08-21 at 07.29.48.jpg>)
-┌─────────────────┐       ┌──────────────────────────────┐
-│     Discord     │ ───▶  │   Discord Bot (Dev mode)     │
-│  (File Upload)  │       │  + OpenAI API (summarize)    │
-└─────────────────┘       └─────────┬─────────┬──────────┘
-                                    │ create  │ optional
-                                    │ issue   │ gist
-               ┌────────────────────┘         │
-               ▼                              ▼
-        ┌──────────────┐               ┌──────────────┐
-        │ GitHub Issues│               │  GitHub Gist │
-        └──────────────┘               └──────────────┘
+
 
 ## セットアップ
 
