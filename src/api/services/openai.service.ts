@@ -1,10 +1,11 @@
 import OpenAI from 'openai';
 import { Logger } from '../../shared/logger';
-import { ExternalServiceError } from '../../shared/error-handler';
+import { ExternalServiceError, ValidationError } from '../../shared/error-handler';
 import { Metrics } from '../../shared/metrics';
 import { ProcessedFile } from '../../shared/types';
 import * as fs from 'fs';
 import * as yaml from 'js-yaml';
+import { SecretStore, SECRET_KEYS } from '../../shared/secret-store';
 
 export interface SummarizationOptions {
   maxLength?: number;
@@ -13,21 +14,19 @@ export interface SummarizationOptions {
 }
 
 export class OpenAIService {
-  private client: OpenAI;
   private prompts: any;
 
   constructor() {
-    const apiKey = process.env.OPENAI_API_KEY;
-    if (!apiKey) {
-      throw new Error('OPENAI_API_KEY environment variable is required');
-    }
-
-    this.client = new OpenAI({
-      apiKey,
-    });
-
     // Load prompts from YAML file
     this.loadPrompts();
+  }
+
+  private async getClientForGuild(guildId: string): Promise<OpenAI> {
+    const key = await SecretStore.get(guildId, SECRET_KEYS.openai) || process.env.OPENAI_API_KEY;
+    if (!key) {
+      throw new ValidationError('OpenAI APIキーが未設定です。/config openai_key で設定してください。');
+    }
+    return new OpenAI({ apiKey: key });
   }
 
   private loadPrompts(): void {
@@ -42,7 +41,8 @@ export class OpenAIService {
 
   async summarizeFile(
     file: ProcessedFile,
-    options: SummarizationOptions = {}
+    options: SummarizationOptions = {},
+    guildId: string
   ): Promise<string> {
     const startTime = Date.now();
     
@@ -53,9 +53,10 @@ export class OpenAIService {
         fileType: file.type
       });
 
+      const client = await this.getClientForGuild(guildId);
       const prompt = this.buildSummarizationPrompt(file, options);
       
-      const response = await this.client.chat.completions.create({
+      const response = await client.chat.completions.create({
         model: 'gpt-4o-mini',
         messages: [
           {
@@ -167,9 +168,10 @@ export class OpenAIService {
     return cleanedLines.join('\n').trim();
   }
 
-  async healthCheck(): Promise<boolean> {
+  async healthCheckForGuild(guildId: string): Promise<boolean> {
     try {
-      const response = await this.client.chat.completions.create({
+      const client = await this.getClientForGuild(guildId);
+      const response = await client.chat.completions.create({
         model: 'gpt-4o-mini',
         messages: [
           {
@@ -187,7 +189,7 @@ export class OpenAIService {
     }
   }
 
-  async formatWithInsert(content: string, style: 'prep' | 'pas'): Promise<string> {
+  async formatWithInsert(content: string, style: 'prep' | 'pas', guildId: string): Promise<string> {
     const startTime = Date.now();
     
     try {
@@ -196,6 +198,7 @@ export class OpenAIService {
         contentLength: content.length
       });
 
+      const client = await this.getClientForGuild(guildId);
       const systemPrompt = this.prompts.insert.system_prompt.content;
       const template = style === 'prep' 
         ? this.prompts.insert.prep_template.content 
@@ -203,7 +206,7 @@ export class OpenAIService {
       
       const userPrompt = template.replace('{content}', content);
       
-      const response = await this.client.chat.completions.create({
+      const response = await client.chat.completions.create({
         model: 'gpt-4o-mini',
         messages: [
           {

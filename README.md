@@ -1,49 +1,155 @@
-# discord-commit
+## 最終仕様のまとめ
 
-## 概要
+このプロジェクトは、**Discord上のファイルをGitHub Issue化するBot**と、その**Issueを元にAI要約を実行するGitHub Actionsワークフロー**を連携させるシステムです。
 
-Discordにアップロードされたファイル（Markdown、テキスト、YAML、JSON）をOpenAIで自動要約し、GitHub IssueまたはGistとして登録するSaaS型Botです。
+### コンポーネントの役割
+- **Discord Bot (githubapps)**: ファイルアップロード検知とIssue作成までを担当。
+- **GitHub App**: Botがユーザーのリポジトリにアクセスするための認証・権限管理。
+- **GitHub Actions ワークフロー**: ユーザーリポジトリ側でAI要約を実行し、結果をIssueコメントに投稿。
 
-## 主な機能
+### セキュリティ
+- APIキーはBot運営者が保持せず、ユーザーが自分のリポジトリのSecretsに設定。
+- 運営者はユーザーのAPIキーにアクセス不可。
 
-- **ファイル自動処理**: Discord上のMarkdown、テキスト等を自動検知・処理
-- **AI要約**: OpenAI GPT-4o-miniによる高品質な要約生成
-- **GitHub統合**: 自動でIssue作成またはGist作成（ファイルサイズに応じて自動選択）
-- **ファイルベース永続化**: PostgreSQL不要、YAML/JSONファイルでデータ管理
-- **多テナント対応**: 複数のDiscordサーバーとGitHubリポジトリの組み合わせをサポート
-- **エラーハンドリング**: 包括的なエラー処理とロギング
-- **メトリクス**: Prometheusメトリクスによる監視
+### 運用モード
+- `SUMMARY_MODE=workflow`：Botは要約せずIssue作成のみ（本番用）。
+- `SUMMARY_MODE=bot`：Bot内で要約（開発用）。
 
-## 技術スタック
+### 設定
+- `/config`コマンドでDiscord上からリポジトリ紐付け等を設定可能。
+- マスターキー自動生成対応。
+- コマンドはBot起動時に自動同期。
 
-- **Backend**: TypeScript + Node.js
-- **Discord**: Discord.js v14
-- **GitHub**: Octokit (GitHub App認証)
-- **AI**: OpenAI API (GPT-4o-mini)
-- **API Server**: Fastify
-- **データ永続化**: YAML/JSONファイル（将来的なDB移行対応）
-- **監視**: Winston Logger + Prometheus metrics
+## 要約モードの切り替え（workflowモード）
+
+運用でAPIキーをBotに渡さない場合、要約はGitHub Actions側で行い、BotはIssueの作成のみ行います。APIキーはGitHub Secretsに設定されるためBot運営者は知ることができません。
+
+- 環境変数 `SUMMARY_MODE=workflow` を設定すると、Bot内の要約呼び出しをスキップします（本番用）。
+- 既存の開発用途では `SUMMARY_MODE=bot`（既定）でそのままBot内要約が動作します（開発用）。
+
+### `.env` 例
+
+```
+SUMMARY_MODE=workflow
+```
+
+### GitHub Actions ワークフロー雛形
+
+リポジトリに `.github/workflows/discord-commit.yml` を追加し、`OPENAI_API_KEY` を Secrets に設定してください。
+
+```yaml
+name: discord-commit
+on:
+  issues:
+    types: [opened]
+permissions:
+  issues: write
+concurrency:
+  group: issues-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  summarize:
+    if: contains(join(fromJson(toJson(github.event.issue.labels)).*.name, ','), 'discord-upload')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get issue body
+        id: get_issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { number, body } = context.payload.issue;
+            core.setOutput('number', number.toString());
+            core.setOutput('body', body || '');
+      - name: Call OpenAI (summary)
+        id: openai
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ISSUE_BODY: ${{ steps.get_issue.outputs.body }}
+        run: |
+          SUMMARY=$(curl -s https://api.openai.com/v1/chat/completions \
+            -H "Authorization: Bearer ${OPENAI_API_KEY}" \
+            -H "Content-Type: application/json" \
+            -d "$(jq -n --arg u "$ISSUE_BODY" '{
+              model: "gpt-4o-mini",
+              messages: [
+                {role:"system", content:"あなたは簡潔な要約アシスタントです。重要点のみ日本語で3〜6行にまとめてください。"},
+                {role:"user", content: $u}
+              ],
+              temperature: 0.3
+            }')" | jq -r '.choices[0].message.content // ""')
+          echo "summary<<EOF" >> $GITHUB_OUTPUT
+          echo "$SUMMARY" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+      - name: Post summary as issue comment
+        if: ${{ steps.openai.outputs.summary != '' }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const number = Number(process.env.ISSUE_NUMBER);
+            const body = `## 要約\n\n${process.env.SUMMARY}`;
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: number,
+              body
+            });
+        env:
+          ISSUE_NUMBER: ${{ steps.get_issue.outputs.number }}
+          SUMMARY: ${{ steps.openai.outputs.summary }}
+```
+
+## 通信方式
+
+本システムでは独自のWebSocket実装は使用しません。通信は以下の方式で行います。
+
+- **Discord Bot ⇔ Discord API**: Discord.jsを介して接続（内部でWebSocketを使用しますが、アプリ側で管理不要）。
+- **Bot ⇔ GitHub**: REST APIおよびWebhookで連携。
+- **AI要約処理**: GitHub Actions上で実行し、リアルタイムな双方向通信は行いません。
+
+この構成により、サーバー側で独自WebSocketサーバーを立てる必要がなく、運用・セキュリティ負担を軽減できます。
 
 ## アーキテクチャ
 
-```
-┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
-│     Discord     │───▶│  Discord Bot     │───▶│   OpenAI API    │
-│   (File Upload) │    │  (Message Handler)│    │  (Summarization)│
-└─────────────────┘    └──────────────────┘    └─────────────────┘
-                                │
-                                ▼
-┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
-│   GitHub API    │◀───│  GitHub Service  │───▶│  File Storage   │
-│ (Issue/Gist)    │    │  (App Auth)      │    │   (YAML/JSON)   │
-└─────────────────┘    └──────────────────┘    └─────────────────┘
-                                │
-                                ▼
-                       ┌──────────────────┐
-                       │  Fastify API     │
-                       │  (Webhooks/Setup)│
-                       └──────────────────┘
-```
+### 本番（workflowモード）
+
+┌─────────────────┐      ┌──────────────────┐
+│     Discord     │ ───▶ │   Discord Bot    │
+│  (File Upload)  │      │  (Issue Creator) │
+└─────────────────┘      └─────────┬────────┘
+                                    │ create issue
+                                    ▼
+                            ┌─────────────────┐
+                            │     GitHub      │
+                            │     Issues      │
+                            └─────────┬───────┘
+                                      │ triggers
+                                      ▼
+                            ┌──────────────────┐
+                            │  GitHub Actions  │
+                            │ (Summary with    │
+                            │  OPENAI_API_KEY  │
+                            │   in Secrets)    │
+                            └─────────┬────────┘
+                                      │ comment
+                                      ▼
+                            ┌─────────────────┐
+                            │  Issue Comment  │
+                            └─────────────────┘
+
+### 開発（botモード）
+
+┌─────────────────┐      ┌──────────────────────────────┐
+│     Discord     │ ───▶ │   Discord Bot (Dev mode)     │
+│  (File Upload)  │      │  + OpenAI API (summarize)    │
+└─────────────────┘      └─────────┬─────────┬──────────┘
+                                    │ create  │ optional
+                                    │ issue   │ gist
+               ┌────────────────────┘         │
+               ▼                              ▼
+        ┌──────────────┐               ┌──────────────┐
+        │ GitHub Issues│               │  GitHub Gist │
+        └──────────────┘               └──────────────┘
 
 ## セットアップ
 
@@ -66,7 +172,7 @@ cp .env.example .env
 - `GITHUB_APP_ID`: GitHub App ID
 - `GITHUB_APP_PRIVATE_KEY`: GitHub App Private Key
 - `GITHUB_WEBHOOK_SECRET`: GitHub Webhook Secret
-- `OPENAI_API_KEY`: OpenAI API Key
+- `OPENAI_API_KEY`（開発用のみ）: OpenAI API Key（本番はリポジトリのGitHub Secretsに設定）
 
 ### 3. ビルドと起動
 

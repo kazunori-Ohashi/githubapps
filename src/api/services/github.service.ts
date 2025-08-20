@@ -71,8 +71,13 @@ export class GitHubService {
       const targetRepo = this.getTargetRepo(guildMapping, channelId);
       const installationClient = await this.getInstallationClient(guildMapping.installation_id);
 
-      // insertコマンドの場合は要約をスキップ
-      const summary = skipSummary ? '' : await this.openaiService.summarizeFile(file);
+      // 要約実施可否: 明示スキップ or 環境変数 SUMMARY_MODE=workflow でスキップ
+      const envSummaryMode = (process.env.SUMMARY_MODE || 'bot').toLowerCase();
+      const skipByEnv = envSummaryMode === 'workflow';
+      const shouldSkipSummary = skipSummary || skipByEnv;
+
+      // insertコマンドの場合やworkflowモードの場合は要約をスキップ
+      const summary = shouldSkipSummary ? '' : await this.openaiService.summarizeFile(file, {}, guildId);
 
       const isLargeFile = file.size > 512 * 1024; // 512KB threshold
       
@@ -91,6 +96,7 @@ export class GitHubService {
         guildId,
         fileName: file.original_name,
         resultType: isLargeFile ? 'gist' : 'issue',
+        summaryMode: shouldSkipSummary ? 'workflow(skip)' : 'bot',
         duration: `${duration}s`
       });
 

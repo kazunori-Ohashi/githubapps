@@ -8,6 +8,8 @@ import { TwitterService } from '../../api/services/twitter.service';
 import { OpenAIService } from '../../api/services/openai.service';
 import { FileProcessorService } from '../../api/services/file-processor.service';
 import { ConfigService } from '../../api/services/config.service';
+import { FileUtils } from '../../shared/file-utils';
+import { SecretStore, SECRET_KEYS, maskKey } from '../../shared/secret-store';
 import { ProcessedFile } from '../../shared/types';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -144,7 +146,8 @@ export class InteractionHandler {
       // OpenAIで整形
       const formattedContent = await this.openaiService.formatWithInsert(
         fileResult.content,
-        style
+        style,
+        interaction.guild.id
       );
       
       // GitHub Issueとして保存
@@ -258,33 +261,136 @@ export class InteractionHandler {
            if (!interaction.guild) {
              throw new ValidationError('このコマンドはサーバー内でのみ使用できます。');
            }
-
-           // 権限チェック
+           // 権限チェック（すべてのサブコマンドで共通）
            if (!interaction.memberPermissions?.has('ManageGuild')) {
              throw new ValidationError('このコマンドはサーバー管理権限が必要です。');
            }
 
-           const repo = interaction.options.getString('repo', true);
-           const installationId = interaction.options.getString('installation', true);
+          const sub = (interaction.options as any).getSubcommand?.() as string | undefined;
 
-           await interaction.deferReply({ ephemeral: true });
+           if (!sub) {
+             // 旧仕様の互換: repo/installation を直下オプションで受け付け
+             const repo = interaction.options.getString('repo');
+             const installationId = interaction.options.getString('installation');
+             if (repo && installationId) {
+               await interaction.deferReply({ ephemeral: true });
+               await this.configService.configureGuild(
+                 interaction.guild.id,
+                 interaction.guild.name,
+                 repo,
+                 installationId
+               );
+               const [owner, repoName] = repo.split('/');
+               await interaction.editReply(`✅ このサーバーを ${owner}/${repoName} (installation: ${installationId}) に紐付けました。`);
+               Metrics.recordDiscordMessage(interaction.guild.id, 'success');
+               return;
+             }
+             throw new ValidationError('サブコマンドが必要です。openai_key/status/delete_openai/test_openai などを使用してください。');
+           }
 
-           // 設定処理実行
-           await this.configService.configureGuild(
-             interaction.guild.id,
-             interaction.guild.name,
-             repo,
-             installationId
-           );
+           // サブコマンド分岐
+           if (sub === 'openai_key') {
+             const key = interaction.options.getString('key', true);
+             await interaction.deferReply({ ephemeral: true });
+             await SecretStore.put(interaction.guild.id, SECRET_KEYS.openai, key);
+             await interaction.editReply(`🔐 OpenAI APIキーを保存しました: ${maskKey(key)}`);
+             Metrics.recordDiscordMessage(interaction.guild.id, 'success');
+             return;
+           }
 
-           // 成功メッセージ
-           const [owner, repoName] = repo.split('/');
-           await interaction.editReply(
-             `✅ このサーバーを ${owner}/${repoName} (installation: ${installationId}) に紐付けました。\n` +
-             `ℹ️ /config-status で現設定を確認できます。/config-test で疎通テストできます。`
-           );
+           if (sub === 'status') {
+             await interaction.deferReply({ ephemeral: true });
+             // OpenAI key status
+             const has = await SecretStore.has(interaction.guild.id, SECRET_KEYS.openai);
+             const keyMasked = has ? maskKey((await SecretStore.get(interaction.guild.id, SECRET_KEYS.openai)) || '') : '未設定';
 
-           Metrics.recordDiscordMessage(interaction.guild.id, 'success');
+             // Repo mapping status
+             const gm = await FileUtils.getGuildMapping(interaction.guild.id);
+             const repoLine = gm
+               ? `${gm.default_repo.owner}/${gm.default_repo.name} (installation: ${gm.installation_id})`
+               : '未設定 → /config repo name:<owner/repo> installation:<ID>';
+
+             // Updated at (latest of guild mapping or secret file)
+             let updated: string | undefined = undefined;
+             try {
+               const candidates: string[] = [];
+               if ((gm as any)?.updated_at) candidates.push((gm as any).updated_at as string);
+               const dataDir = process.env.DATA_PATH || path.join(process.cwd(), 'data');
+               const secretFile = path.join(dataDir, 'guilds', `${interaction.guild.id}.json`);
+               try {
+                 const st = await fs.promises.stat(secretFile);
+                 candidates.push(st.mtime.toISOString());
+               } catch {}
+               if (candidates.length > 0) {
+                 candidates.sort();
+                 updated = candidates[candidates.length - 1];
+               }
+             } catch {}
+
+             const lines = [
+               '🔎 設定状況',
+               `- Repo: ${repoLine}`,
+               `- OpenAIキー: ${has ? keyMasked : '未設定 → /config openai_key key:<sk-...>'}`,
+               `- OpenAI疎通: 未実行 → /config test_openai`,
+               `- 保存モード: Issue`,
+               updated ? `- 最終更新: ${updated}` : undefined,
+             ].filter(Boolean) as string[];
+
+             await interaction.editReply(lines.join('\n'));
+             return;
+           }
+
+           if (sub === 'delete_openai') {
+             await interaction.deferReply({ ephemeral: true });
+             await SecretStore.remove(interaction.guild.id, SECRET_KEYS.openai);
+             await interaction.editReply('🗑️ OpenAI APIキーを削除しました。');
+             return;
+           }
+
+           if (sub === 'test_openai') {
+             await interaction.deferReply({ ephemeral: true });
+             const ok = await this.openaiService.healthCheckForGuild(interaction.guild.id);
+             await interaction.editReply(ok ? '✅ OpenAI 疎通OK' : '❌ OpenAI 疎通失敗（キーや接続を確認してください）');
+             return;
+           }
+
+            if (sub === 'repo') {
+             // 新仕様の repo サブコマンド（owner/repo + installation）
+             const repo = interaction.options.getString('name', true);
+             const installationId = interaction.options.getString('installation', true);
+             await interaction.deferReply({ ephemeral: true });
+             await this.configService.configureGuild(
+               interaction.guild.id,
+               interaction.guild.name,
+               repo,
+               installationId
+             );
+             const [owner, repoName] = repo.split('/');
+             await interaction.editReply(`✅ このサーバーを ${owner}/${repoName} (installation: ${installationId}) に紐付けました。`);
+             Metrics.recordDiscordMessage(interaction.guild.id, 'success');
+             return;
+           }
+
+            if (sub === 'repo_help') {
+              await interaction.deferReply({ ephemeral: true });
+              const helpLines = [
+                '🆘 repo 設定ヘルプ',
+                '',
+                '- name: Issueを作成するリポジトリを owner/repo 形式で指定します。',
+                '  例: ame00000/githubapps（このリポジトリにIssueが作成されます）',
+                '',
+                '- installation: GitHub App のインストールID（数値）を指定します。',
+                '  取得方法（簡単）: GitHubのApp設定 → Configure/Installations で対象を開き、URL末尾の数値を使用します。',
+                '  例: https://github.com/settings/installations/12345678 → 12345678',
+                '',
+                '入力例:',
+                '/config repo name:ame00000/githubapps installation:12345678'
+              ].join('\n');
+              await interaction.editReply(helpLines);
+              return;
+            }
+
+           throw new ValidationError('不明なサブコマンドです。');
 
          } catch (error) {
            const guildId = interaction.guild?.id;
