@@ -1,6 +1,6 @@
 ## 最終仕様のまとめ
 
-このプロジェクトは、**Discord上のファイルをGitHub Issue化するBot**と、その**Issueを元にAI要約を実行するGitHub Actionsワークフロー**を連携させるシステムです。
+このプロジェクトは、**DiscordBotから入力した文字情報やファイルをGitHub Issue化するBot**と、その**Issueを元にAI要約を実行するGitHub Actionsワークフロー**を連携させるシステムです。Obsidianのgithubと同期されたVaultへのファイルインサートのために作られました。
 
 ### コンポーネントの役割
 - **Discord Bot (githubapps)**: ファイルアップロード検知とIssue作成までを担当。
