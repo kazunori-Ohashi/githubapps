@@ -264,4 +264,55 @@ export class OpenAIService {
       throw new ExternalServiceError('OpenAI', `Unexpected error: ${(error as Error).message}`);
     }
   }
+
+  /**
+   * Summarize long text for tweeting. Uses twitter prompts from prompts.yaml.
+   * Falls back to truncation if OpenAI fails.
+   */
+  async summarizeForTweet(longText: string, guildId: string, maxChars: number = 280): Promise<string> {
+    const startTime = Date.now();
+    try {
+      const client = await this.getClientForGuild(guildId);
+
+      // Build prompts from YAML and inject runtime hints about max length
+      const systemPrompt: string = this.prompts?.twitter?.system || 'You are a skilled social media copywriter.';
+      const baseUser: string = this.prompts?.twitter?.user || 'Please summarize the following text into a single tweet.';
+
+      const userPrompt = `${baseUser}\n\n(Keep under ${maxChars} characters including spaces.)\n\n---\n${longText}`;
+
+      const response = await client.chat.completions.create({
+        model: 'gpt-4o-mini',
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt }
+        ],
+        max_tokens: Math.max(60, Math.min(140, Math.ceil(maxChars * 0.6))),
+        temperature: 0.7,
+      });
+
+      let summary = response.choices?.[0]?.message?.content?.trim() || '';
+      if (!summary) {
+        throw new ExternalServiceError('OpenAI', 'Empty summary');
+      }
+
+      // Enforce max length as final safeguard
+      if (summary.length > maxChars) {
+        summary = summary.substring(0, Math.max(0, maxChars - 1)).trimEnd() + '…';
+      }
+
+      Metrics.recordOpenAIApiCall('gpt-4o-mini', 'success');
+      return summary;
+    } catch (error) {
+      Logger.error('summarizeForTweet failed', error as Error);
+      Metrics.recordOpenAIApiCall('gpt-4o-mini', 'error');
+      // Fallback: simple truncation
+      const safeMax = Math.max(10, maxChars);
+      return longText.length > safeMax
+        ? longText.substring(0, Math.max(0, safeMax - 1)).trimEnd() + '…'
+        : longText;
+    } finally {
+      const duration = (Date.now() - startTime) / 1000;
+      Logger.debug('summarizeForTweet completed', { duration: `${duration}s` });
+    }
+  }
 }

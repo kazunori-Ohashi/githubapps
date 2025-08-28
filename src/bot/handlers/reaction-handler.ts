@@ -43,6 +43,7 @@ export class ReactionHandler {
     });
 
     try {
+      const maxLen = parseInt(process.env.TWEET_MAX || '280', 10) || 280;
       let contentToTweet = '';
 
       // 1. Check for content in embeds
@@ -72,10 +73,14 @@ export class ReactionHandler {
         return;
       }
 
-      // 140字超は要約
+      // 長文は要約（ギルドキーでOpenAIを解決）
       let tweetText = contentToTweet;
-      if (tweetText.length > 140) {
-        tweetText = await this.twitterService.summarizeForTweet(tweetText);
+      if (tweetText.length > maxLen) {
+        if (message.guild) {
+          tweetText = await this.twitterService.summarizeForTweet(tweetText, message.guild.id);
+        } else {
+          tweetText = tweetText.substring(0, Math.max(0, maxLen - 1)).trimEnd() + '…';
+        }
       }
       const tweetUrl = `https://twitter.com/intent/tweet?text=${encodeURIComponent(tweetText)}`;
 
@@ -111,9 +116,9 @@ export class ReactionHandler {
                 new ActionRowBuilder<TextInputBuilder>().addComponents(
                   new TextInputBuilder()
                     .setCustomId('tweet_text')
-                    .setLabel('ツイート本文（140字以内）')
+                    .setLabel(`ツイート本文（最大${maxLen}字）`)
                     .setStyle(TextInputStyle.Paragraph)
-                    .setMaxLength(140)
+                    .setMaxLength(maxLen)
                     .setValue(tweetText)
                 )
               );

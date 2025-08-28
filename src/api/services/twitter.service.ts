@@ -32,19 +32,20 @@ export class TwitterService {
    */
   public async createTweetIntentUrl(text: string): Promise<string> {
     try {
-      Logger.info(`Creating tweet for text of length ${text.length}`);
+      const maxLen = this.getMaxLength();
+      Logger.info(`Creating tweet for text of length ${text.length} (max ${maxLen})`);
       let tweetText = text;
 
-      if (text.length > 140) {
-        Logger.debug('Text is over 140 characters, summarizing for tweet.');
-        tweetText = await this.summarizeForTweet(text);
+      // Do not call OpenAI here – this method is also used after user editing.
+      if (tweetText.length > maxLen) {
+        tweetText = this.truncate(tweetText, maxLen);
       }
 
       const encodedText = encodeURIComponent(tweetText);
       const tweetUrl = `https://twitter.com/intent/tweet?text=${encodedText}`;
       
       Logger.info(`Successfully created tweet intent URL`, { urlLength: tweetUrl.length });
-      Metrics.recordGitHubApiCall('twitter.intent.create', 'success'); // Using GitHub metrics for now
+      Metrics.recordGitHubApiCall('twitter.intent.create', 'success'); // reusing metric bucket for now
 
       return tweetUrl;
     } catch (error) {
@@ -59,32 +60,21 @@ export class TwitterService {
    * @param longText The text to summarize.
    * @returns A summary of the text, less than 140 characters.
    */
-  public async summarizeForTweet(longText: string): Promise<string> {
-    const systemPrompt = this.prompts.twitter.system;
-    const userPrompt = this.prompts.twitter.user.replace('{longText}', longText);
+  public async summarizeForTweet(longText: string, guildId: string): Promise<string> {
+    const maxLen = this.getMaxLength();
+    // Delegate to OpenAIService which resolves per-guild API keys and prompts
+    const summary = await this.openaiService.summarizeForTweet(longText, guildId, maxLen);
+    return summary.length > maxLen ? this.truncate(summary, maxLen) : summary;
+  }
 
-    try {
-      const response = await (this.openaiService as any).client.chat.completions.create({
-        model: 'gpt-4o-mini',
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPrompt }
-        ],
-        max_tokens: 60, // Approx 140 chars
-        temperature: 0.7,
-      });
+  private getMaxLength(): number {
+    const v = parseInt(process.env.TWEET_MAX || '280', 10);
+    return Number.isFinite(v) && v > 0 ? v : 280;
+  }
 
-      const summary = response.choices[0]?.message?.content?.trim();
-      if (!summary) {
-        throw new Error('OpenAI returned an empty summary.');
-      }
-      
-      return summary.length > 140 ? summary.substring(0, 140) : summary;
-
-    } catch (error) {
-      Logger.error('Failed to summarize text for tweet', error as Error);
-      // Fallback to simple truncation if AI fails
-      return longText.substring(0, 137) + '...';
-    }
+  private truncate(text: string, max: number): string {
+    if (text.length <= max) return text;
+    if (max <= 1) return text.slice(0, max);
+    return text.substring(0, Math.max(0, max - 1)).trimEnd() + '…';
   }
 }
