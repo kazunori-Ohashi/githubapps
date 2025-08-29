@@ -109,6 +109,13 @@ jobs:
 
 この構成により、サーバー側で独自WebSocketサーバーを立てる必要がなく、運用・セキュリティ負担を軽減できます。
 
+## Twitter連携（ツイートプレビュー）
+
+- 機能概要: Botが生成した結果メッセージ（Issue/Gist作成の返信など）に対してユーザーが❤️リアクションを付けると、本文からツイート候補を抽出し、編集UI（モーダル）付きでプレビューを表示します。最終的な投稿は「Twitterの投稿画面（intent URL）」を開いてユーザーが送信する方式です（BotがX APIで自動投稿はしません）。
+- 文字数制御: 既定では最大280文字。環境変数 `TWEET_MAX` で変更可能（例: 140に固定）。超過する場合は、ギルドごとに保存されたOpenAIキー（/configで設定）を使って短縮要約し、それでも超えれば末尾を省略記号で安全に切り詰めます。
+- OpenAI利用: 要約には `prompts.yaml` の `twitter` セクションを使用し、ギルド単位のキーを `SecretStore` から解決します。キー未設定時やエラー時は切り詰めにフォールバックします。
+- 開発/運用意図: X（Twitter）APIの制約や運用負荷を避けるため、intent URL方式（ユーザー操作による投稿）を採用しています。
+
 ## アーキテクチャ
 
 ### 本番（workflowモード）
@@ -143,6 +150,7 @@ cp .env.example .env
 - `GITHUB_APP_PRIVATE_KEY`: GitHub App Private Key
 - `GITHUB_WEBHOOK_SECRET`: GitHub Webhook Secret
 - `OPENAI_API_KEY`（開発用のみ）: OpenAI API Key（本番はリポジトリのGitHub Secretsに設定）
+- `TWEET_MAX`（任意）: ツイート最大文字数。既定は280。140などに変更可能。
 
 ### 3. ビルドと起動
 

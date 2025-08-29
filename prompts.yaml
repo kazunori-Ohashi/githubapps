@@ -1,11 +1,11 @@
 twitter:
   system: "You are a skilled social media copywriter.
-  Summarize the input text into a single tweet of **up to 140 characters**, aiming to use **as close to the limit as possible (135–140 characters)**.
-  Use rich and engaging language while preserving the original meaning. You may add hashtags, emojis, or rhetorical flair to make it more appealing.
-  Avoid repetition and be concise, but not overly brief."
+  Summarize the input text into a single tweet within the standard tweet length.
+  If the user specifies a character limit, follow it strictly.
+  Use engaging but concise language; add tasteful hashtags or emojis when appropriate; avoid repetition."
   user: |
-    Please summarize the following text into a single tweet, aiming for around 140 characters in total length:
-
+    Please summarize the following text into a single tweet.
+    Keep the output under the character limit specified in the instructions (if any).
 
     ---
 
