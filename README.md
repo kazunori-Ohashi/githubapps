@@ -210,6 +210,45 @@ src/
 └── index.ts               # アプリケーション起動
 ```
 
+## Issue → Markdown 自動保存（Obsidian Vault: Writing/）
+
+Discordで作成した Issue を、GitHub Actions が自動で Markdown に変換してリポジトリ内の `Writing/` ディレクトリへ保存・コミットします。`data/` は秘匿用のためGit管理しません。
+
+- ワークフロー: `.github/workflows/parse-issue-to-news.yaml`
+- スクリプト: `scripts/parse-issue-to-news.js`
+- 出力先: 既定は環境変数 `ARTICLES_DIR` で指定（本リポでは `Writing/` を使用）
+
+### 仕組み
+- トリガー: GitHub Issue の `opened` / `edited`
+- 処理: Issue の `title` をファイル名化、`body` をそのまま Markdown として保存
+- ディレクトリ作成: 出力先が存在しなければ自動作成して保存
+- コミット: `Writing/<ファイル名>.md` のみをステージしてコミット（`data/` には触れない）
+
+### セキュリティ上の注意
+- `.gitignore` により `data/` は常に無視されます。秘匿ファイルは `data/` に保持してください。
+- 公開したいMarkdownのみ `Writing/` に出力・コミットされます。
+
+### よくある質問（FAQ）
+- 既存ランの「Re-run」で直らない: ワークフロー定義はイベント発生時点のコミットで固定されます。修正を反映するには、新しく Issue を作成/編集して再トリガーしてください。
+- ブランチが `main` 以外: ワークフロー内の `git push` を既定ブランチに合わせて変更してください。
+
+### ローカル検証（任意）
+```bash
+# モックイベントを作成
+cat > /tmp/mock_issue_event.json << 'JSON'
+{
+  "issue": {
+    "title": "Test Article: Hello World!",
+    "body": "# Hello World\n\nThis is a test news article from an issue."
+  }
+}
+JSON
+
+# スクリプト実行（Writing/ へ出力）
+ARTICLES_DIR=Writing GITHUB_EVENT_PATH=/tmp/mock_issue_event.json \
+  node scripts/parse-issue-to-news.js
+```
+
 ## 対応ファイル形式
 
 - `.md` (Markdown)
