@@ -1,26 +1,10 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import * as yaml from 'js-yaml';
 import jwt from 'jsonwebtoken';
 import { Logger } from '../../shared/logger';
-import { ErrorHandler, ValidationError, ExternalServiceError } from '../../shared/error-handler';
-
-export interface GuildMapping {
-  tenant_id: string;
-  installation_id: string;
-  default_repo: string;
-  channel_overrides: Record<string, any>;
-  updated_at: string;
-}
-
-export interface Installation {
-  installation_id: string;
-  app_id: string;
-  account_login: string;
-  account_type: 'User' | 'Organization';
-  selected_repos: string[];
-  updated_at: string;
-}
+import { ValidationError, ExternalServiceError } from '../../shared/error-handler';
+import { FileUtils } from '../../shared/file-utils';
+import { GuildMapping as GuildMappingType, GitHubInstallation as GitHubInstallationType } from '../../shared/types';
 
 export class ConfigService {
   private readonly guildMappingsDir = path.join(process.cwd(), 'data', 'guild_mappings');
@@ -53,24 +37,27 @@ export class ConfigService {
     }
   }
 
-  // GitHub API認証とトークン発行
+  // App JWT 生成（\n を実際の改行に置換）
+  private generateAppJwt(): string {
+    const appId = process.env.GITHUB_APP_ID;
+    const privateKeyRaw = process.env.GITHUB_APP_PRIVATE_KEY;
+    if (!appId || !privateKeyRaw) {
+      throw new ExternalServiceError('GitHub', 'GitHub App設定が不完全です。');
+    }
+
+    const privateKey = privateKeyRaw.replace(/\\n/g, '\n');
+    const payload = {
+      iat: Math.floor(Date.now() / 1000),
+      exp: Math.floor(Date.now() / 1000) + 10 * 60,
+      iss: appId,
+    };
+    return jwt.sign(payload, privateKey, { algorithm: 'RS256' });
+  }
+
+  // GitHub API認証とトークン発行（Installation Access Token）
   async getInstallationToken(installationId: string): Promise<string> {
     try {
-      const appId = process.env.GITHUB_APP_ID;
-      const privateKey = process.env.GITHUB_APP_PRIVATE_KEY;
-
-      if (!appId || !privateKey) {
-        throw new ExternalServiceError('GitHub', 'GitHub App設定が不完全です。');
-      }
-
-      // JWT生成
-      const payload = {
-        iat: Math.floor(Date.now() / 1000),
-        exp: Math.floor(Date.now() / 1000) + (10 * 60), // 10分間有効
-        iss: appId
-      };
-
-      const token = jwt.sign(payload, privateKey, { algorithm: 'RS256' });
+      const token = this.generateAppJwt();
 
       // Installation Access Token取得
       const response = await fetch(`https://api.github.com/app/installations/${installationId}/access_tokens`, {
@@ -129,12 +116,13 @@ export class ConfigService {
     }
   }
 
-  // インストール情報取得
-  async getInstallationInfo(installationId: string, installationToken: string): Promise<any> {
+  // インストール情報取得（App JWT で認証）
+  async getInstallationInfo(installationId: string): Promise<any> {
     try {
+      const token = this.generateAppJwt();
       const response = await fetch(`https://api.github.com/app/installations/${installationId}`, {
         headers: {
-          'Authorization': `token ${installationToken}`,
+          'Authorization': `Bearer ${token}`,
           'Accept': 'application/vnd.github.v3+json'
         }
       });
@@ -157,41 +145,60 @@ export class ConfigService {
     await fs.promises.rename(tempPath, filePath);
   }
 
-  // guild_mappingsファイルのupsert
+  // guild_mappings の read-modify-write での安全な更新
   async upsertGuildMapping(guildId: string, guildName: string, installationId: string, repo: string): Promise<void> {
-    const filePath = path.join(this.guildMappingsDir, `${guildId}.yml`);
-    
-    const mapping: GuildMapping = {
-      tenant_id: installationId,
-      installation_id: installationId,
-      default_repo: repo,
-      channel_overrides: {},
-      updated_at: new Date().toISOString()
-    };
+    const existing = await FileUtils.getGuildMapping(guildId);
+    const parts = repo.split('/');
+    const owner: string | undefined = parts[0];
+    const name: string | undefined = parts[1];
+    if (!owner || !name) {
+      throw new ValidationError('repo 解析エラー：owner/repo の形式に分解できませんでした。');
+    }
+    const now = new Date().toISOString();
 
-    const content = yaml.dump(mapping);
-    await this.atomicWrite(filePath, content);
-    
+    const mapping: GuildMappingType = existing
+      ? {
+          ...existing,
+          guild_id: guildId,
+          guild_name: guildName || existing.guild_name,
+          installation_id: parseInt(installationId, 10),
+          default_repo: { owner, name },
+          updated_at: now,
+          channels: existing.channels || [],
+        }
+      : {
+          guild_id: guildId,
+          guild_name: guildName,
+          installation_id: parseInt(installationId, 10),
+          default_repo: { owner, name },
+          channels: [],
+          created_at: now,
+          updated_at: now,
+        };
+
+    await FileUtils.saveGuildMapping(mapping);
     Logger.info('Guild mapping updated', { guildId, installationId, repo });
   }
 
-  // installationsファイルのupsert
-  async upsertInstallation(installationId: string, installationInfo: any, repo: string): Promise<void> {
-    const filePath = path.join(this.installationsDir, `${installationId}.yml`);
-    
-    const installation: Installation = {
-      installation_id: installationId,
-      app_id: process.env.GITHUB_APP_ID || '',
-      account_login: installationInfo.account?.login || '',
-      account_type: installationInfo.account?.type || 'User',
-      selected_repos: [repo],
-      updated_at: new Date().toISOString()
+  // installations の更新（shared/types に統一）
+  async upsertInstallation(installationId: string, installationInfo: any): Promise<void> {
+    const installation: GitHubInstallationType = {
+      installation_id: parseInt(installationId, 10),
+      app_id: installationInfo.app_id,
+      account: {
+        login: installationInfo.account?.login || '',
+        id: installationInfo.account?.id || 0,
+        type: installationInfo.account?.type || 'User',
+      },
+      // repositories は App API 応答に含まれないため省略（optional）
+      permissions: installationInfo.permissions || {},
+      created_at: installationInfo.created_at,
+      updated_at: installationInfo.updated_at,
+      suspended_at: installationInfo.suspended_at || undefined,
     };
 
-    const content = yaml.dump(installation);
-    await this.atomicWrite(filePath, content);
-    
-    Logger.info('Installation updated', { installationId, repo });
+    await FileUtils.saveInstallation(installation);
+    Logger.info('Installation updated', { installationId });
   }
 
   // メインの設定処理
@@ -208,13 +215,13 @@ export class ConfigService {
       await this.validateRepoAccess(installationToken, repo);
 
       // 4. インストール情報取得
-      const installationInfo = await this.getInstallationInfo(installationId, installationToken);
+      const installationInfo = await this.getInstallationInfo(installationId);
 
       // 5. guild_mappings/{guildId}.ymlをupsert
       await this.upsertGuildMapping(guildId, guildName, installationId, repo);
 
       // 6. installations/{installation_id}.ymlをupsert
-      await this.upsertInstallation(installationId, installationInfo, repo);
+      await this.upsertInstallation(installationId, installationInfo);
 
       Logger.info('Configuration completed successfully', { guildId, repo, installationId });
     } catch (error) {
@@ -222,4 +229,4 @@ export class ConfigService {
       throw error;
     }
   }
-} 
+}
