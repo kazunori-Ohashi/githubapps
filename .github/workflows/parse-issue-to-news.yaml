@@ -24,12 +24,26 @@ jobs:
           node scripts/parse-issue-to-news.js
         env:
           GITHUB_EVENT_PATH: ${{ github.event_path }}
+          ARTICLES_DIR: Writing
+
+      - name: Discover created markdown file
+        id: discover
+        shell: bash
+        run: |
+          set -euo pipefail
+          dir="Writing"
+          fname=$(ls -1t "$dir"/*.md 2>/dev/null | head -n1 | xargs -n1 basename || true)
+          if [ -z "${fname:-}" ]; then
+            echo "No markdown file found under $dir/" >&2
+            exit 1
+          fi
+          echo "filename=${fname}" >> "$GITHUB_OUTPUT"
 
       - name: Commit and push the new markdown file
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}
-          git add data/${{ steps.parser.outputs.filename }}
+          git add Writing/${{ steps.discover.outputs.filename }}
           git commit -m "docs: add new article from issue #${{ github.event.issue.number }}" || echo "No changes to commit"
           git push origin HEAD:main
