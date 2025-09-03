@@ -3,7 +3,11 @@ const fs = require('fs');
 const path = require('path');
 
 // --- 設定 ---
-const OUTPUT_DIR = path.resolve(__dirname, '../data');
+// 出力先は環境変数 ARTICLES_DIR（例: "news" や "docs/news"）。未指定時は repo 直下の news/。
+const ARTICLES_DIR = process.env.ARTICLES_DIR || 'news';
+const OUTPUT_DIR = path.isAbsolute(ARTICLES_DIR)
+  ? ARTICLES_DIR
+  : path.resolve(__dirname, '..', ARTICLES_DIR);
 
 // --- メイン処理 ---
 async function main() {
