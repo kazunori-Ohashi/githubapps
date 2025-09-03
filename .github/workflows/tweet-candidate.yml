@@ -1,0 +1,161 @@
+name: Generate Tweet Candidates
+
+on:
+  issues:
+    types: [labeled]
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: Issue number to process (manual test)
+        required: true
+        type: number
+      body_override:
+        description: Optional raw text to use instead of the issue body
+        required: false
+        type: string
+
+permissions:
+  issues: write
+
+concurrency:
+  group: tweet-${{ github.event.issue.number || inputs.issue_number }}
+  cancel-in-progress: false
+
+jobs:
+  tweet:
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'issues' && github.event.action == 'labeled' && github.event.label.name == 'tweet-candidate')
+    runs-on: ubuntu-latest
+    env:
+      MODEL: gpt-4o-mini
+      TWEET_MAX: ${{ vars.TWEET_MAX || '280' }}
+    steps:
+      - name: Resolve issue context
+        id: ctx
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            let number = undefined;
+            let body = undefined;
+
+            if (context.eventName === 'workflow_dispatch') {
+              number = Number(core.getInput('issue_number'));
+              const override = core.getInput('body_override');
+              if (override) {
+                body = override;
+              } else {
+                const res = await github.rest.issues.get({ owner, repo, issue_number: number });
+                body = res.data.body || '';
+              }
+            } else {
+              number = context.payload.issue.number;
+              body = context.payload.issue.body || '';
+            }
+
+            core.setOutput('owner', owner);
+            core.setOutput('repo', repo);
+            core.setOutput('number', String(number));
+            core.setOutput('body', body);
+
+      - name: Generate A/B tweet candidates (OpenAI)
+        id: openai
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          MODEL: ${{ env.MODEL }}
+          MAXLEN: ${{ env.TWEET_MAX }}
+          INPUT_TEXT: ${{ steps.ctx.outputs.body }}
+        run: |
+          set -euo pipefail
+          if [ -z "${OPENAI_API_KEY:-}" ]; then
+            echo "Missing OPENAI_API_KEY secret" >&2
+            exit 1
+          fi
+          # Build JSON prompt asking for strict JSON output
+          read -r -d '' SYSTEM << 'SYS' || true
+          You are a skilled social media copywriter. Produce exactly two tweet variants for the given Japanese text.
+          - Each variant must be at most ${MAXLEN} characters (including spaces) after output.
+          - Keep proper nouns and key figures. No URLs unless present in source.
+          - Avoid emojis except when clearly improving clarity. At most 1 emoji.
+          - 0 or 1 newline only. Prefer one concise sentence or two short clauses.
+          - If the source is too long, compress aggressively but keep the core message.
+          Output strict JSON: {"a": "...", "b": "..."} with no extra text.
+          SYS
+          read -r -d '' USER << 'USR' || true
+          次の本文から、上記ルールに従って日本語のツイート候補を2案作成してください。
+          ---
+          ${INPUT_TEXT}
+          USR
+
+          BODY=$(jq -n --arg s "$SYSTEM" --arg u "$USER" '{
+            model: env.MODEL,
+            messages: [ {role:"system", content:$s}, {role:"user", content:$u} ],
+            temperature: 0.4
+          }')
+
+          RESP=$(curl -sS https://api.openai.com/v1/chat/completions \
+            -H "Authorization: Bearer ${OPENAI_API_KEY}" \
+            -H "Content-Type: application/json" \
+            -d "$BODY")
+
+          RAW=$(echo "$RESP" | jq -r '.choices[0].message.content // empty')
+          if [ -z "$RAW" ]; then
+            echo "OpenAI returned no content" >&2
+            echo "resp=$RESP" >&2
+            exit 1
+          fi
+
+          # Try to parse strict JSON; fallback to heuristic split if needed
+          if echo "$RAW" | jq . >/dev/null 2>&1; then
+            A=$(echo "$RAW" | jq -r '.a // empty')
+            B=$(echo "$RAW" | jq -r '.b // empty')
+          else
+            A=$(printf "%s" "$RAW" | sed -n '1p')
+            B=$(printf "%s" "$RAW" | sed -n '2p')
+          fi
+
+          # Enforce length limits
+          trim() { python3 - "$1" "$MAXLEN" << 'PY'
+import sys
+s = sys.argv[1]
+maxlen = int(sys.argv[2])
+if len(s) <= maxlen:
+    print(s)
+else:
+    t = s[:max(0, maxlen-1)].rstrip() + '…'
+    print(t)
+PY
+          }
+          A=$(trim "$A")
+          B=$(trim "$B")
+
+          echo "a<<EOF" >> "$GITHUB_OUTPUT"; echo "$A" >> "$GITHUB_OUTPUT"; echo "EOF" >> "$GITHUB_OUTPUT"
+          echo "b<<EOF" >> "$GITHUB_OUTPUT"; echo "$B" >> "$GITHUB_OUTPUT"; echo "EOF" >> "$GITHUB_OUTPUT"
+
+      - name: Comment candidates on issue
+        uses: actions/github-script@v7
+        env:
+          A: ${{ steps.openai.outputs.a }}
+          B: ${{ steps.openai.outputs.b }}
+          MAXLEN: ${{ env.TWEET_MAX }}
+        with:
+          script: |
+            const owner = core.getInput('owner') || '${{ steps.ctx.outputs.owner }}';
+            const repo = core.getInput('repo') || '${{ steps.ctx.outputs.repo }}';
+            const number = Number(core.getInput('number') || '${{ steps.ctx.outputs.number }}');
+            const a = process.env.A || '';
+            const b = process.env.B || '';
+            function intent(s){ return 'https://twitter.com/intent/tweet?text=' + encodeURIComponent(s); }
+            const body = [
+              '🕊️ ツイート候補を生成しました（最大 ' + process.env.MAXLEN + ' 字）',
+              '',
+              'A) ' + a,
+              '[Tweetする](' + intent(a) + ')',
+              '',
+              'B) ' + b,
+              '[Tweetする](' + intent(b) + ')'
+            ].join('\n');
+            await github.rest.issues.createComment({ owner, repo, issue_number: number, body });
+
