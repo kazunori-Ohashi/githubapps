@@ -116,17 +116,9 @@ jobs:
             B=$(printf "%s" "$RAW" | sed -n '2p')
           fi
 
-          # Enforce length limits
-          trim() { python3 - "$1" "$MAXLEN" << 'PY'
-import sys
-s = sys.argv[1]
-maxlen = int(sys.argv[2])
-if len(s) <= maxlen:
-    print(s)
-else:
-    t = s[:max(0, maxlen-1)].rstrip() + '…'
-    print(t)
-PY
+          # Enforce length limits (Python one-liner, avoids YAML heredoc issues)
+          trim() {
+            python3 -c 'import sys; s=sys.argv[1]; m=int(sys.argv[2]); print(s if len(s)<=m else (s[:max(0,m-1)].rstrip()+"…"))' "$1" "$MAXLEN"
           }
           A=$(trim "$A")
           B=$(trim "$B")
@@ -158,4 +150,3 @@ PY
               '[Tweetする](' + intent(b) + ')'
             ].join('\n');
             await github.rest.issues.createComment({ owner, repo, issue_number: number, body });
-
