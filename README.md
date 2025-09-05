@@ -1,3 +1,6 @@
+<!-- Language: 日本語 | [English](README.en.md) -->
+[English README is here](README.en.md)
+
 ## 最終仕様のまとめ
 
 このプロジェクトは、**DiscordBotから入力した文字情報やファイルをGitHub Issue化するBot**と、その**Issueを元にAI要約を実行するGitHub Actionsワークフロー**を連携させるシステムです。Obsidianのgithubと同期されたVaultへのファイルインサートのために作られました。
